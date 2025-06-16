@@ -1,0 +1,31 @@
+name = "TurbulentTransport"
+uuid = "9bf5e8f4-5746-4003-bc69-ef83265c10ca"
+authors = ["Orso Meneghini <orso82@gmail.com>", "Tom Neiser <neisert@fusion.gat.com>"]
+version = "1.0.0"
+
+[deps]
+BSON = "fbb218c0-5317-5bc6-957e-2ee96dd4b1f0"
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+Flux = "587475ba-b771-5e3f-ad9e-33799f191a9c"
+GACODE = "bb074124-7a58-47ce-bd41-6b7098184f23"
+IMAS = "13ead8c1-b7d1-41bb-a6d0-5b8b65ed587a"
+IMASutils = "b8e4ee59-9bed-3a6a-a553-8dd24d6374ad"
+Measurements = "eff96d63-e80a-5855-80a2-b1b0885c5ab7"
+Memoize = "c03570c3-d221-55d1-a50c-7939bbd78826"
+ONNXNaiveNASflux = "2e935253-ba83-4645-9154-13ffeb13a688"
+ONNXRunTime = "e034b28e-924e-41b2-b98f-d2bbeb830c6a"
+StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
+TJLF = "12ecd31c-256b-4db5-a799-cd5afeb0bd7d"
+
+[compat]
+BSON = "0.3"
+Flux = "0.14, 0.15, 0.16"
+GACODE = "1.0.4"
+IMAS = "5.3"
+IMASutils = "1.5.1"
+Measurements = "2"
+Memoize = "0.4"
+ONNXNaiveNASflux = "0.2"
+ONNXRunTime = "1.3.1"
+StatsBase = "0.34"
+TJLF = "1"
