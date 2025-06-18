@@ -351,3 +351,50 @@ function run_tglf(input_tglfs::Vector{InputTGLF})
 end
 
 export run_tglf
+
+"""
+    apply_presets!(input_tglf::InputTGLF)
+
+Applies the same preset rules as TGLF Fortran for consistency:
+
+1. SAT_RULE specific settings:
+   - SAT_RULE = 2 or 3:
+     * XNU_MODEL = 3
+     * WDIA_TRAPPED = 1.0
+     * If UNITS = "GYRO", changes to "CGYRO"
+     * GEOMETRY_FLAG must not be 0
+   - SAT_RULE = 1:
+     * XNU_MODEL = 2
+   - SAT_RULE = 0:
+     * UNITS = "GYRO"
+     * XNU_MODEL = 2
+     * NMODES > 2 is set to 4
+
+2. Other rules:
+   - If USE_BPER is true, ALPHA_MACH = 0.0
+"""
+function apply_presets!(input_tglf::InputTGLF)
+    # Handle SAT_RULE specific settings
+    if input_tglf.SAT_RULE == 2 || input_tglf.SAT_RULE == 3
+        input_tglf.XNU_MODEL = 3
+        input_tglf.WDIA_TRAPPED = 1.0
+        if input_tglf.UNITS == "GYRO"
+            input_tglf.UNITS = "CGYRO"
+        end
+    elseif input_tglf.SAT_RULE == 1
+        input_tglf.XNU_MODEL = 2
+    elseif input_tglf.SAT_RULE == 0
+        input_tglf.UNITS = "GYRO"
+        input_tglf.XNU_MODEL = 2
+        # Adjust NMODES for SAT_RULE=0
+        if input_tglf.NMODES > 2
+            input_tglf.NMODES = 4
+        end
+    end
+
+    # Handle USE_BPER setting
+    if input_tglf.USE_BPER
+        input_tglf.ALPHA_MACH = 0.0
+    end
+    return input_tglf
+end
