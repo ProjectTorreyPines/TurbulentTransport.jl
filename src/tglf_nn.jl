@@ -272,7 +272,7 @@ function run_tglfnn(input_tglf::InputTGLF; model_filename::String, uncertain::Bo
     if fidelity == :GKNN
         base_fluxes = [sol.ENERGY_FLUX_e, sol.ENERGY_FLUX_i, sol.PARTICLE_FLUX_e, sol.STRESS_TOR_i]
         if model_filename in ["sat3_em_d3d_azf-1"]
-            gknne = TGLFNN.loadmodelonce(model_filename * "_gknne24")
+            gknne = loadmodelonce(model_filename * "_gknne24")
             err_e = flux_array(gknne, vcat(inputs, base_fluxes[1]); uncertain, warn_nn_train_bounds, fidelity)
             gknni = loadmodelonce(model_filename * "_gknni24")
             err_i = flux_array(gknni, vcat(inputs, base_fluxes[2]); uncertain, warn_nn_train_bounds, fidelity)
