@@ -188,7 +188,7 @@ function InputTGLF(
     input_tglf.Q_PRIME_LOC = @. @views q * a^2 / rmin[gridpoint_cp] * dqdr
 
     # saturation rules
-    input_tglf.ALPHA_ZF = 1.0 # 1 = default, -1 = low ky cutoff kypeak search
+    input_tglf.ALPHA_ZF = -1.0 # 1 = default, -1 = low ky cutoff kypeak search
     input_tglf.USE_MHD_RULE = false
     input_tglf.NMODES = input_tglf.NS .+ 2 # capture main branches: ES each species + BPER + VPAR_SHEAR
     input_tglf.NKY = 12 # 12 is default, 16 for smoother spectrum
