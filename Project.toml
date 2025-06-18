@@ -1,7 +1,7 @@
 name = "TurbulentTransport"
 uuid = "9bf5e8f4-5746-4003-bc69-ef83265c10ca"
 authors = ["Orso Meneghini <orso82@gmail.com>", "Tom Neiser <neisert@fusion.gat.com>"]
-version = "1.0.0"
+version = "1.0.1"
 
 [deps]
 BSON = "fbb218c0-5317-5bc6-957e-2ee96dd4b1f0"
