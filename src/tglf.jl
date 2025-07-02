@@ -266,9 +266,10 @@ function load(input_tglf::InputTGLF, filename::String)
         if field ∉ keys(ip_dict)
             continue
         end
-        if ip_dict[field] == "T" || ip_dict[field] == ".true."
+        # Handle boolean values (both .true./.false. and true/false formats)
+        if lowercase(ip_dict[field]) == ".true." || lowercase(ip_dict[field]) == "true" || ip_dict[field] == "T"
             setproperty!(input_tglf, field, true)
-        elseif type_of_item == "F" || ip_dict[field] == ".false."
+        elseif lowercase(ip_dict[field]) == ".false." || lowercase(ip_dict[field]) == "false" || ip_dict[field] == "F"
             setproperty!(input_tglf, field, false)
         elseif type_of_item <: Float64
             setproperty!(input_tglf, field, parse(Float64, ip_dict[field]))
