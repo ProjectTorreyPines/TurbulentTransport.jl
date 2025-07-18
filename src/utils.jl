@@ -31,12 +31,12 @@ function save(input::Union{InputTGLF,InputCGYRO,InputQLGYRO}, filename::Abstract
 end
 
 """
-    compare_two_input_tglfs(itp_1::InputTGLF, itp_2::InputTGLF)
+    compare_two_input_tglfs(itp_1::InputTGLF{T}, itp_2::InputTGLF{T}) where {T<:Real
 
 Compares two input_tglfs, prints the difference and stores the difference in a new InputTGLF
 """
-function compare_two_input_tglfs(itp_1::InputTGLF, itp_2::InputTGLF)
-    itp_diff = InputTGLF()
+function compare_two_input_tglfs(itp_1::InputTGLF{T}, itp_2::InputTGLF{T}) where {T<:Real}
+    itp_diff = InputTGLF{T}()
     for field in fieldnames(typeof(itp_diff))
         if typeof(getproperty(itp_1, field)) <: String
             setproperty!(itp_diff, field, getproperty(itp_1, field) * "  " * getproperty(itp_2, field))
@@ -69,7 +69,7 @@ function diff(A::InputTGLF, B::InputTGLF)
     return differences
 end
 
-function scan(input_tglf::InputTGLF; kw...)
+function scan(input_tglf::InputTGLF{T}; kw...) where {T<:Real}
     # Convert keyword arguments to a dictionary for easier handling
     kw_dict = Dict(kw)
 
@@ -80,7 +80,7 @@ function scan(input_tglf::InputTGLF; kw...)
 
     # Extract one keyword and its values
     key, values = pop!(kw_dict)
-    intglfs = InputTGLF[]
+    intglfs = InputTGLF{T}[]
 
     # Iterate over the values for the current keyword
     for v in values

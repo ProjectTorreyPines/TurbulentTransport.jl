@@ -157,7 +157,7 @@ function flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; warn_nn_train_
     return hcat(collect(map(x0 -> flux_array(fluxmodel, x0; warn_nn_train_bounds, fidelity, xx), eachslice(x; dims=2)))...)
 end
 
-function flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN, xx::Vector{T}=similar(x)) where{T}
+function flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN, xx::Vector{T}=similar(x)) where {T}
     for (ix, name) in enumerate(fluxmodel.xnames)
         xx[ix] = contains(name, "_log10") ? log10(x[ix]) : x[ix]
     end
@@ -182,7 +182,7 @@ function flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; warn_nn_train_
     end
 end
 
-function flux_array(fluxensemble::TGLFNNensemble, x::AbstractArray; uncertain::Bool=false, warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN)
+function flux_array(fluxensemble::TGLFNNensemble, x::AbstractArray{T}; uncertain::Bool=false, warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
     nmodels = length(fluxensemble.models)
     nouts = length(fluxensemble.models[1].ynames)
     if fidelity == :GKNN
@@ -190,7 +190,7 @@ function flux_array(fluxensemble::TGLFNNensemble, x::AbstractArray; uncertain::B
     end
     nsamples = size(x)[2]
 
-    tmp = zeros(nmodels, nouts, nsamples)
+    tmp = zeros(T, nmodels, nouts, nsamples)
     Threads.@threads for k in 1:length(fluxensemble.models)
         tmp[k, :, :] = flux_array(fluxensemble.models[k], x; warn_nn_train_bounds=(warn_nn_train_bounds && k == 1), fidelity)
     end
@@ -203,14 +203,14 @@ function flux_array(fluxensemble::TGLFNNensemble, x::AbstractArray; uncertain::B
     end
 end
 
-function flux_array(fluxensemble::TGLFNNensemble, x::AbstractVector; uncertain::Bool=false, warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN)
+function flux_array(fluxensemble::TGLFNNensemble, x::AbstractVector{T}; uncertain::Bool=false, warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
     nmodels = length(fluxensemble.models)
     nouts = length(fluxensemble.models[1].ynames)
     if fidelity == :GKNN
         nouts = div(nouts, 2)
     end
 
-    tmp = zeros(nmodels, nouts)
+    tmp = zeros(T, nmodels, nouts)
     Threads.@threads for k in 1:length(fluxensemble.models)
         tmp[k, :] = flux_array(fluxensemble.models[k], x; warn_nn_train_bounds=(warn_nn_train_bounds && k == 1), fidelity)
     end
@@ -303,7 +303,7 @@ function run_tglfnn(input_tglf::InputTGLF; model_filename::String, uncertain::Bo
 end
 
 """
-    run_tglfnn(input_tglfs::Vector{InputTGLF}; model_filename::String, uncertain::Bool=false, warn_nn_train_bounds::Bool, fidelity::Symbol=:TGLFNN)
+    run_tglfnn(input_tglfs::Vector{InputTGLF{T}}; model_filename::String, uncertain::Bool=false, warn_nn_train_bounds::Bool, fidelity::Symbol=:TGLFNN) where {T<:Real}
 
 Run TGLFNN for multiple InputTGLF, using a specific `model_filename`.
 
@@ -317,13 +317,13 @@ Returns a vector of `flux_solution` structures
 """
 const log_suffix = "_log10"
 const n_log_suffix = ncodeunits(log_suffix)
-function run_tglfnn(input_tglfs::Vector{InputTGLF}; model_filename::String, uncertain::Bool=false, warn_nn_train_bounds::Bool, fidelity::Symbol=:TGLFNN)
+function run_tglfnn(input_tglfs::Vector{InputTGLF{T}}; model_filename::String, uncertain::Bool=false, warn_nn_train_bounds::Bool, fidelity::Symbol=:TGLFNN) where {T<:Real}
     if model_filename in ["sat3_em_d3d_azf-1"] && fidelity == :GKNN
         tglfmod = loadmodelonce(model_filename * "_tglfnn24")
     else
         tglfmod = loadmodelonce(model_filename)
     end
-    inputs = zeros(length(tglfmod.xnames), length(input_tglfs))
+    inputs = zeros(T, length(tglfmod.xnames), length(input_tglfs))
     for (i, input_tglf) in enumerate(input_tglfs)
         for (k, item) in enumerate(tglfmod.xnames)
             if endswith(item, log_suffix)
@@ -423,7 +423,7 @@ function build_input_value(input_tglf::InputTGLF, name::String)
     return occursin("_log10", name) ? log10(value) : value
 end
 
-function build_inputs(input_tglfs::Vector{InputTGLF}, xnames::Vector{String})
+function build_inputs(input_tglfs::Vector{InputTGLF{T}}, xnames::Vector{String}) where {T<:Real}
     return hcat([[build_input_value(t, x) for x in xnames] for t in input_tglfs]...)
 end
 
@@ -432,7 +432,7 @@ function reorder_output(out::AbstractMatrix, order::Vector{Int})
     return reduce(hcat, [out[i, :] for i in order])'
 end
 
-function run_tglfnn_onnx(input_tglfs::Vector{InputTGLF}, onnx_path::String, xnames::Vector{String}, ynames::Vector{String})
+function run_tglfnn_onnx(input_tglfs::Vector{InputTGLF{T}}, onnx_path::String, xnames::Vector{String}, ynames::Vector{String}) where {T<:Real}
     model = load_onnx_model(onnx_path)
     inputs = build_inputs(input_tglfs, xnames)
     tmp = model(Dict("input" => Float32.(inputs')))["output"]'
