@@ -257,7 +257,7 @@ The warn_nn_train_bounds checks against the standard deviation of the inputs to 
 
 Returns a `flux_solution` structure
 """
-function run_tglfnn(input_tglf::InputTGLF; model_filename::String, uncertain::Bool=false, warn_nn_train_bounds::Bool, fidelity::Symbol=:TGLFNN)
+function run_tglfnn(input_tglf::InputTGLF{T}; model_filename::String, uncertain::Bool=false, warn_nn_train_bounds::Bool, fidelity::Symbol=:TGLFNN) where {T<:Real}
     if model_filename in ["sat3_em_d3d_azf-1"] && fidelity == :GKNN
         tglfmod = loadmodelonce(model_filename * "_tglfnn24")
     else
@@ -280,7 +280,7 @@ function run_tglfnn(input_tglf::InputTGLF; model_filename::String, uncertain::Bo
             err_g = flux_array(gknng, vcat(inputs, base_fluxes[3]); uncertain, warn_nn_train_bounds, fidelity)
             gknnp = loadmodelonce(model_filename * "_gknnp24")
             err_p = flux_array(gknnp, vcat(inputs, base_fluxes[4]); uncertain, warn_nn_train_bounds, fidelity)
-            sol = GACODE.FluxSolution(
+            sol = GACODE.FluxSolution{T}(
                 base_fluxes[1] * err_e[1],  # ENERGY_FLUX_e
                 base_fluxes[2] * err_i[1],  # ENERGY_FLUX_i
                 base_fluxes[3] * err_g[1],  # PARTICLE_FLUX_e
@@ -290,7 +290,7 @@ function run_tglfnn(input_tglf::InputTGLF; model_filename::String, uncertain::Bo
         elseif model_filename in ["sat3_em_d3d+mastu+nstx_azf-1", "sat2_em_d3d+mastu+nstx_azf-1"]
             gknn = loadmodelonce(model_filename * "_gknn25")
             err = flux_array(gknn, vcat(inputs, [base_fluxes[3], base_fluxes[4], base_fluxes[1], base_fluxes[2]]); uncertain, warn_nn_train_bounds, fidelity)
-            sol = GACODE.FluxSolution(
+            sol = GACODE.FluxSolution{T}(
                 sol.ENERGY_FLUX_e * err[3],
                 sol.ENERGY_FLUX_i * err[4],
                 sol.PARTICLE_FLUX_e * err[1],
@@ -493,14 +493,14 @@ function flux_solution(xx::Vararg{T}) where {T<:Real}
         ENERGY_FLUX_i = 4
         PARTICLE_FLUX_e = 1
         STRESS_TOR_i = 2
-        sol = GACODE.FluxSolution(xx[ENERGY_FLUX_e], xx[ENERGY_FLUX_i], xx[PARTICLE_FLUX_e], T[], xx[STRESS_TOR_i])
+        sol = GACODE.FluxSolution{T}(xx[ENERGY_FLUX_e], xx[ENERGY_FLUX_i], xx[PARTICLE_FLUX_e], T[], xx[STRESS_TOR_i])
     else
         ENERGY_FLUX_e = n_fields - 1
         ENERGY_FLUX_i = n_fields
         PARTICLE_FLUX_e = 1
         PARTICLE_FLUX_i = 2:n_fields-3
         STRESS_TOR_i = n_fields - 2
-        sol = GACODE.FluxSolution(xx[ENERGY_FLUX_e], xx[ENERGY_FLUX_i], xx[PARTICLE_FLUX_e], T[xx[i] for i in PARTICLE_FLUX_i], xx[STRESS_TOR_i])
+        sol = GACODE.FluxSolution{T}(xx[ENERGY_FLUX_e], xx[ENERGY_FLUX_i], xx[PARTICLE_FLUX_e], T[xx[i] for i in PARTICLE_FLUX_i], xx[STRESS_TOR_i])
     end
     return sol
 end

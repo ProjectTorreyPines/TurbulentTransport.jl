@@ -1,6 +1,6 @@
-function run_tjlf(input_tjlf::InputTJLF)
+function run_tjlf(input_tjlf::InputTJLF{T}) where {T<:Real}
     QL_flux_out = TJLF.run_tjlf(input_tjlf)
-    return GACODE.FluxSolution(TJLF.Qe(QL_flux_out), TJLF.Qi(QL_flux_out), TJLF.Γe(QL_flux_out), TJLF.Γi(QL_flux_out), TJLF.Πi(QL_flux_out))
+    return GACODE.FluxSolution{T}(TJLF.Qe(QL_flux_out), TJLF.Qi(QL_flux_out), TJLF.Γe(QL_flux_out), TJLF.Γi(QL_flux_out), TJLF.Πi(QL_flux_out))
 end
 
 function run_tjlf(input_tglf::InputTGLF)
