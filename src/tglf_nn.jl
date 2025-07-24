@@ -197,7 +197,11 @@ function flux_array(fluxensemble::TGLFNNensemble, x::AbstractArray{T}; uncertain
 
     mean, std = StatsBase.mean_and_std(tmp, 1; corrected=true)
     if uncertain && nmodels > 1
-        return Measurements.measurement.(mean[1, :, :], std[1, :, :])
+        if T <: Measurements.Measurement
+            return mean[1, :, :]
+        else
+            return Measurements.measurement.(mean[1, :, :], std[1, :, :])
+        end
     else
         return mean[1, :, :]
     end
@@ -217,7 +221,11 @@ function flux_array(fluxensemble::TGLFNNensemble, x::AbstractVector{T}; uncertai
 
     mean, std = StatsBase.mean_and_std(tmp, 1; corrected=true)
     if uncertain
-        return Measurements.measurement.(mean[1, :], std[1, :])
+        if T <: Measurements.Measurement
+            return mean[1, :]
+        else
+            return Measurements.measurement.(mean[1, :], std[1, :])
+        end
     else
         return mean[1, :]
     end
