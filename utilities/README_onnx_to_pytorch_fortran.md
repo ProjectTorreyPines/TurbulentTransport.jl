@@ -111,8 +111,10 @@ module tglf_torchscript
 
     end subroutine setup_model
 
-    subroutine run_model(input,output) ! Can add variance if required
+    subroutine run_model(input,output) ! add variance if required
 
+      ! These inputs and outputs need not be the same type of real as
+      ! associated with the torch calls below.
       real, dimension(:), intent(in)  :: input
       real, dimension(:), intent(out) :: output
 
@@ -122,7 +124,7 @@ module tglf_torchscript
       ! Call traced model
       call torch_model_forward(model, input_tensor, output_tensor)
 
-      ! Map returned outputs
+      ! Map returned outputs (add variance if required)
       output(1:4) = output_mean(1,1:4)
 
     end subroutine run_model
@@ -141,8 +143,8 @@ program call_tglf_torchscript
 
   ! sat3_em_nstx_azf-1 specific
   integer, parameter :: in_size = 31
-  real, allocatable, dimension(:) :: model_input
-  real, allocatable, dimension(:) :: model_output
+  real, allocatable, dimension(:) :: model_input  ! Need not be single
+  real, allocatable, dimension(:) :: model_output ! precision reals.
 
   allocate(model_input(in_size))
   allocate(model_output(4))      ! 4 Fluxes returned
