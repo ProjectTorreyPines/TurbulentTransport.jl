@@ -1,5 +1,5 @@
-mutable struct InputTGLFs
-    tglfs::Vector{InputTGLF}
+mutable struct InputTGLFs{T}
+    tglfs::Vector{InputTGLF{T}}
 end
 
 function Base.setproperty!(inputTGLFs::InputTGLFs, field::Symbol, value::AbstractVector{<:Any})

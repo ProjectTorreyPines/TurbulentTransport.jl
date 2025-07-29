@@ -48,7 +48,8 @@ function run_qlgyro(input_qlgyro::InputQLGYRO, input_cgyro::InputCGYRO)
         rethrow(e)
     end
 
-    sol = GACODE.FluxSolution(
+    T = Float64
+    sol = GACODE.FluxSolution{T}(
         fluxes["Q/Q_GB_elec"],
         fluxes["Q/Q_GB_ions"],
         fluxes["Gam/Gam_GB_elec"],

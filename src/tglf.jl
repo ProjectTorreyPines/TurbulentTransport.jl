@@ -31,12 +31,12 @@ function InputTGLF(dd::IMAS.dd, gridpoint_cp::AbstractVector{Int}, sat::Symbol=:
 end
 
 function InputTGLF(
-    eqt::IMAS.equilibrium__time_slice,
-    cp1d::IMAS.core_profiles__profiles_1d,
+    eqt::IMAS.equilibrium__time_slice{T},
+    cp1d::IMAS.core_profiles__profiles_1d{T},
     gridpoint_cp::AbstractVector{Int},
     sat::Symbol,
     electromagnetic::Bool,
-    lump_ions::Bool)
+    lump_ions::Bool) where {T<:Real}
 
     e = IMAS.cgs.e # statcoul
     k = IMAS.cgs.k # erg/eV
@@ -99,7 +99,7 @@ function InputTGLF(
     Bt = eqt.global_quantities.vacuum_toroidal_field.b0
     buitp = IMAS.interp1d(rho_eq, GACODE.bunit(eqt1d))
     bunit = @. @views buitp(rho_cp[gridpoint_cp]) * T_to_Gauss
-    input_tglf = InputTGLFs([InputTGLF() for k in eachindex(gridpoint_cp)])
+    input_tglf = InputTGLFs{T}([InputTGLF{T}() for k in eachindex(gridpoint_cp)])
 
     signb = sign(Bt)
     input_tglf.SIGN_BT = signb
@@ -326,7 +326,8 @@ function run_tglf(input_tglf::InputTGLF)
         rethrow(e)
     end
 
-    sol = GACODE.FluxSolution(
+    T = Float64
+    sol = GACODE.FluxSolution{T}(
         fluxes["Q/Q_GB_elec"],
         fluxes["Q/Q_GB_ions"],
         fluxes["Gam/Gam_GB_elec"],
@@ -339,7 +340,7 @@ function run_tglf(input_tglf::InputTGLF)
 end
 
 """
-    run_tglf(input_tglf::InputTGLF)
+    run_tglf(input_tglfs::Vector{InputTGLF{T}}) where {T<:Real}
 
 Run TGLF starting from a vector of InputTGLFs.
 
@@ -347,7 +348,7 @@ NOTE: Each run is done asyncronously (ie. in separate parallel processes)
 
 Returns a `FluxSolution` structure
 """
-function run_tglf(input_tglfs::Vector{InputTGLF})
+function run_tglf(input_tglfs::Vector{InputTGLF{T}}) where {T<:Real}
     return collect(asyncmap(input_tglf -> run_tglf(input_tglf), input_tglfs))
 end
 
