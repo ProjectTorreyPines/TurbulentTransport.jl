@@ -5,10 +5,6 @@ import Memoize
 import StatsBase
 import Measurements
 import BSON
-import ONNXNaiveNASflux
-import ONNXRunTime as ORT
-using ONNXRunTime.CAPI
-using ONNXRunTime: testdatapath
 
 #= ====================================== =#
 #  structs/constructors for the TGLFmodel
@@ -412,59 +408,223 @@ function run_tglfnn(data::Dict; model_filename::String, uncertain::Bool=false, w
     return Dict(name => y[k, :] for (k, name) in enumerate(ynames))
 end
 
-function load_onnx_model(onnx_path::String)
-    if !contains(onnx_path, "/models/")
-        onnx_path = joinpath(dirname(@__DIR__), "models", onnx_path)
-        if !endswith(onnx_path, ".onnx")
-            onnx_path *= ".onnx"
-        end
-        if !isfile(onnx_path)
-            error("TGLFNN model does not exist in $onnx_path")
+
+if !isdefined(@__MODULE__, :_ort_loaded)
+    const _ort_loaded = Ref(false)
+end
+
+if !isdefined(@__MODULE__, :_sess_cache)
+    const _sess_cache = Dict{Tuple{String,Int,Int}, Any}()  # (path, intra, inter)
+end
+
+# local alias for ONNXRunTime; filled on first _load_ort!()
+if !isdefined(@__MODULE__, :ORT)
+    const ORT = nothing
+end
+
+"Set safe defaults only if user didn't set them already."
+function _ensure_onnx_env!()
+    if !haskey(ENV, "OMP_NUM_THREADS")
+        nt = something(tryparse(Int, get(ENV, "SLURM_CPUS_PER_TASK", "")), 1)
+        ENV["OMP_NUM_THREADS"] = string(max(nt, 1))
+    end
+    ENV["OMP_PROC_BIND"] = "false"
+    ENV["KMP_AFFINITY"]  = "disabled"
+    pop!(ENV, "GOMP_CPU_AFFINITY", nothing)
+    return nothing
+end
+
+"Import ONNXRunTime only after env is finalized."
+function _load_ort!()
+    _ort_loaded[] && return
+    @eval import ONNXRunTime
+    if ORT === nothing
+        @eval const ORT = ONNXRunTime  # set alias once
+    end
+    _ort_loaded[] = true
+    return nothing
+end
+
+"Resolve model path; accept bare name and add models/ + .onnx if needed."
+function _resolve_model_path(onnx_path::AbstractString)
+    if !occursin("/models/", onnx_path)
+        onnx_path = joinpath(dirname(@__DIR__), "models",
+                             endswith(onnx_path, ".onnx") ? onnx_path : onnx_path * ".onnx")
+    end
+    isfile(onnx_path) || error("TGLFNN model does not exist in $onnx_path")
+    return onnx_path
+end
+
+function load_onnx_model(onnx_path::String; intra_threads::Int=1, inter_threads::Int=1)
+    _ensure_onnx_env!()
+    _load_ort!()
+
+    # Build session options
+    so = try
+        s = ORT.create_session_options()
+        try ORT.set_intra_op_num_threads!(s, intra_threads) catch end
+        try ORT.set_inter_op_num_threads!(s, inter_threads) catch end
+        try ORT.set_graph_optimization_level!(s, :ORT_ENABLE_ALL) catch end
+        try ORT.set_execution_mode_sequential!(s) catch end
+        s
+    catch
+        nothing
+    end
+
+    onnx_path = _resolve_model_path(onnx_path)
+    return isnothing(so) ?
+        ORT.load_inference(ORT.testdatapath(onnx_path)) :
+        ORT.load_inference(ORT.testdatapath(onnx_path); session_options=so)
+end
+
+"""
+    get_onnx_session(onnx_path; intra_threads=1, inter_threads=1)
+
+Build (and cache) an ONNX Runtime session with explicit thread settings.
+Respects existing OMP env if already set by the caller.
+"""
+function get_onnx_session(onnx_path::String; intra_threads::Int=1, inter_threads::Int=1)
+    _ensure_onnx_env!()
+    _load_ort!()
+
+    onnx_path = _resolve_model_path(onnx_path)
+    key = (onnx_path, intra_threads, inter_threads)
+    if haskey(_sess_cache, key)
+        return _sess_cache[key]
+    end
+
+    # SessionOptions
+    so = try
+        s = ORT.create_session_options()
+        try ORT.set_intra_op_num_threads!(s, intra_threads) catch end
+        try ORT.set_inter_op_num_threads!(s, inter_threads) catch end
+        try ORT.set_graph_optimization_level!(s, :ORT_ENABLE_ALL) catch end
+        try ORT.set_execution_mode_sequential!(s) catch end
+        s
+    catch
+        nothing
+    end
+
+    sess = isnothing(so) ?
+        ORT.load_inference(ORT.testdatapath(onnx_path)) :
+        ORT.load_inference(ORT.testdatapath(onnx_path); session_options=so)
+
+    _sess_cache[key] = sess
+    return sess
+end
+
+# Get (or build) a session once
+function _session(onnx_path::String; intra_threads::Int=1, inter_threads::Int=1)
+    try
+        return get_onnx_session(onnx_path; intra_threads=intra_threads, inter_threads=inter_threads)
+    catch
+        return load_onnx_model(onnx_path; intra_threads=intra_threads, inter_threads=inter_threads)
+    end
+end
+
+# Build X as [N, F] Float32 without intermediate allocations; supports InputTGLF{T}
+function _build_X(input_tglfs::AbstractVector{TJLF.InputTGLF{T}}, xnames::Vector{String}) where {T}
+    N = length(input_tglfs); F = length(xnames)
+    X = Matrix{Float32}(undef, N, F)
+    @inbounds for i in 1:N
+        t = input_tglfs[i]
+        for j in 1:F
+            name = xnames[j]
+            key  = replace(name, "_log10" => "")
+            v    = getfield(t, Symbol(key))
+            X[i, j] = occursin("_log10", name) ? log10(Float32(v)) : Float32(v)
         end
     end
-    return ORT.load_inference(ORT.testdatapath(onnx_path))
+    return X
 end
 
-function build_input_value(input_tglf::InputTGLF, name::String)
-    key = replace(name, "_log10" => "")
-    value = getfield(input_tglf, Symbol(key))
-    return occursin("_log10", name) ? log10(value) : value
+# Extract output from ORT call (handles NamedTuple vs Dict and [M,N] vs [N,M])
+@inline function _extract_Y(res, X_rows::Int, outdim::Int)
+    out = hasproperty(res, :output) ? getfield(res, :output) : res["output"]
+    Y = out
+    # If returned as [M,N], flip to [N,M]
+    if size(Y,1) == outdim && size(Y,2) == X_rows
+        Y = permutedims(Y)
+    end
+    return Y
 end
 
-function build_inputs(input_tglfs::Vector{InputTGLF{T}}, xnames::Vector{String}) where {T<:Real}
-    return hcat([[build_input_value(t, x) for x in xnames] for t in input_tglfs]...)
-end
+function run_tglfnn_onnx(input_tglfs::AbstractVector{TJLF.InputTGLF{T}},
+                         onnx_path::String,
+                         xnames::Vector{String},
+                         ynames::Vector{String};
+                         intra_threads::Int=1, inter_threads::Int=1) where {T<:Real}
 
-# Reorder output rows to match a new order, e.g. [1, 4, 2, 3]
-function reorder_output(out::AbstractMatrix, order::Vector{Int})
-    return reduce(hcat, [out[i, :] for i in order])'
-end
+    sess = _session(onnx_path; intra_threads=intra_threads, inter_threads=inter_threads)
+    X = _build_X(input_tglfs, xnames)                     # [N,F]
+    res = sess((; input = X))                             # NamedTuple or Dict
+    Y  = _extract_Y(res, size(X,1), length(ynames))       # [N,M]
+    cols = [1, 4, 2, 3]
+    Yv = @view Y[:, cols]
 
-function run_tglfnn_onnx(input_tglfs::Vector{InputTGLF{T}}, onnx_path::String, xnames::Vector{String}, ynames::Vector{String}) where {T<:Real}
-    model = load_onnx_model(onnx_path)
-    inputs = build_inputs(input_tglfs, xnames)
-    tmp = model(Dict("input" => Float32.(inputs')))["output"]'
-    tmp_new = reorder_output(tmp, [1, 4, 2, 3])
-    sol = [flux_solution(tmp_new[:, i]...) for i in 1:size(tmp_new, 2)]
+    N = size(Yv, 1)
+    Tsol = typeof(flux_solution(Yv[1,1], Yv[1,2], Yv[1,3], Yv[1,4]))
+    sol = Vector{Tsol}(undef, N)
+    @inbounds for i in 1:N
+        sol[i] = flux_solution(Yv[i,1], Yv[i,2], Yv[i,3], Yv[i,4])
+    end
     return sol
 end
 
-function run_tglfnn_onnx(data::Dict, onnx_path::String, xnames::Vector{String}, ynames::Vector{String})::Dict
-    model = load_onnx_model(onnx_path)
-    xnames_clean = [replace(name, "_log10" => "") for name in xnames]
-    x = reduce(hcat, [Float64.(data[name]) for name in xnames_clean])
-    x = Float32.(x')
-    y = model(Dict("input" => x))["output"]'
-    ynames_clean = [replace(name, "OUT_" => "") for name in ynames]
-    return Dict(name => y[k, :] for (k, name) in enumerate(ynames_clean))
+function run_tglfnn_onnx(data::Dict,
+                         onnx_path::String,
+                         xnames::Vector{String},
+                         ynames::Vector{String};
+                         intra_threads::Int=1, inter_threads::Int=1)::Dict
+
+    sess = _session(onnx_path; intra_threads=intra_threads, inter_threads=inter_threads)
+
+    # Build X :: [N,F] from Dict data
+    xclean = replace.(xnames, "_log10" => "")
+    N = length(data[xclean[1]]); F = length(xnames)
+    X = Matrix{Float32}(undef, N, F)
+    @inbounds for j in 1:F
+        col = data[xclean[j]]
+        @assert length(col) == N
+        if occursin("_log10", xnames[j])
+            for i in 1:N; X[i,j] = log10(Float32(col[i])); end
+        else
+            for i in 1:N; X[i,j] = Float32(col[i]); end
+        end
+    end
+
+    res = sess((; input = X))
+    Y   = _extract_Y(res, size(X,1), length(ynames))      # [N,M]
+    cols = [1, 4, 2, 3]
+    Yv  = @view Y[:, cols]
+    ynames_clean = replace.(ynames, "OUT_" => "")
+
+    return Dict(name => @view(Yv[:,k]) for (k, name) in enumerate(ynames_clean))
 end
 
-function run_tglfnn_onnx(input_tglf::InputTGLF, onnx_path::String, xnames::Vector{String}, ynames::Vector{String})
-    model = load_onnx_model(onnx_path)
-    values = [build_input_value(input_tglf, x) for x in xnames]
-    sol = model(Dict("input" => Float32.([values]')))["output"]'
-    sol_new = [sol[1], sol[4], sol[2], sol[3]]
-    return sol_new
+function run_tglfnn_onnx(input_tglf::TJLF.InputTGLF{T},
+                         onnx_path::String,
+                         xnames::Vector{String},
+                         ynames::Vector{String};
+                         intra_threads::Int=1, inter_threads::Int=1) where {T<:Real}
+
+    sess = _session(onnx_path; intra_threads=intra_threads, inter_threads=inter_threads)
+
+    # X is 1×F
+    F = length(xnames)
+    X = Matrix{Float32}(undef, 1, F)
+    @inbounds for j in 1:F
+        name = xnames[j]
+        key  = replace(name, "_log10" => "")
+        v    = getfield(input_tglf, Symbol(key))
+        X[1,j] = occursin("_log10", name) ? log10(Float32(v)) : Float32(v)
+    end
+
+    res = sess((; input = X))
+    Y   = _extract_Y(res, 1, length(ynames))              # [1,M]
+    cols = [1, 4, 2, 3]
+    y    = vec(@view Y[:, cols])                          # length M (reordered)
+    return y
 end
 
 """
