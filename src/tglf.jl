@@ -234,20 +234,23 @@ end
 """
     load(input_tglf::InputTGLF, filename::AbstractString)
 
-Reads filename (`input.tglf` or `input.tglf.gen` format) and populates input_tglf
+Reads filename (`input.tglf` or `input.tglf.gen` format) and populates input_tglf.
+Returns the mutated `input_tglf`.
 """
 function load(input_tglf::InputTGLF, filename::String)
+    # Read non-empty, stripped lines
     lines = open(filename, "r") do file
-        return filter(x -> length(x) > 0, map(strip, split(read(file, String), "\n")))
+        filter(x -> !isempty(x), map(strip, split(read(file, String), "\n")))
     end
 
-    ip_dict = Dict()
-    if all(line -> contains(line, "="), lines)
+    # Build raw dictionary of Symbol=>String values
+    ip_dict = Dict{Symbol,String}()
+    if all(l -> occursin("=", l), lines)
         for line in lines
             field, value = map(strip, split(line, "="))
             ip_dict[Symbol(field)] = value
         end
-    elseif !all(line -> contains(line, "="), lines)
+    elseif all(l -> occursin("  ", l), lines)
         for line in lines
             value, field = map(strip, split(line, "  "))
             ip_dict[Symbol(field)] = value
@@ -256,30 +259,81 @@ function load(input_tglf::InputTGLF, filename::String)
         error("invalid input.tglf or input.tglf.gen file")
     end
 
-    field_types = fieldtypes(InputTGLF)
-    for (idx, field) in enumerate(fieldnames(typeof(input_tglf)))
-        if typeof(field_types[idx]) <: Union
-            type_of_item = field_types[idx].b
+    # Helper to unwrap Union{Missing,T} or UnionAll versions into T
+    _unwrap_missing(::Type{Missing}) = Missing
+    function _unwrap_missing(ft)::Type
+        if ft isa Union
+            parts = Base.uniontypes(ft)
+            rs = filter(!=(Missing), parts)
+            return length(rs) == 1 ? rs[1] : ft
+        elseif ft isa UnionAll
+            inner = Base.unwrap_unionall(ft)
+            return inner === ft ? ft : _unwrap_missing(inner)
         else
-            type_of_item = field_types[idx]
+            return ft
         end
-        if field ∉ keys(ip_dict)
+    end
+
+    # Use concrete instantiation so parametric T resolves (e.g., T=Float64)
+    cfield_types = fieldtypes(typeof(input_tglf))
+    fnames = fieldnames(typeof(input_tglf))
+
+    for (idx, fname) in enumerate(fnames)
+        fname ∈ keys(ip_dict) || continue
+        raw = ip_dict[fname]
+        ftype = _unwrap_missing(cfield_types[idx])
+
+        # Boolean handling (.true./.false., true/false, T/F)
+        lraw = lowercase(raw)
+        if lraw in (".true.", "true") || raw == "T"
+            setproperty!(input_tglf, fname, true)
+            continue
+        elseif lraw in (".false.", "false") || raw == "F"
+            setproperty!(input_tglf, fname, false)
             continue
         end
-        # Handle boolean values (both .true./.false. and true/false formats)
-        if lowercase(ip_dict[field]) == ".true." || lowercase(ip_dict[field]) == "true" || ip_dict[field] == "T"
-            setproperty!(input_tglf, field, true)
-        elseif lowercase(ip_dict[field]) == ".false." || lowercase(ip_dict[field]) == "false" || ip_dict[field] == "F"
-            setproperty!(input_tglf, field, false)
-        elseif type_of_item <: Float64
-            setproperty!(input_tglf, field, parse(Float64, ip_dict[field]))
-        elseif type_of_item <: Int64
-            setproperty!(input_tglf, field, Int(parse(Float64, ip_dict[field])))
-        elseif type_of_item <: String
-            setproperty!(input_tglf, field, ip_dict[field])
-        else
-            error("parameter $field of type ($type_of_item) not recognized: $(ip_dict[field])")
+
+        # Strings
+        if ftype <: AbstractString
+            setproperty!(input_tglf, fname, raw)
+            continue
         end
+
+        # Int
+        if ftype <: Integer
+            val = try
+                Int(round(parse(Float64, raw)))
+            catch
+                error("Could not parse integer field $(fname) = $(raw)")
+            end
+            setproperty!(input_tglf, fname, val)
+            continue
+        end
+
+        # Real (default to Float64)
+        if ftype <: Real
+            val = try
+                parse(Float64, raw)
+            catch
+                error("Could not parse real field $(fname) = $(raw)")
+            end
+            setproperty!(input_tglf, fname, val)
+            continue
+        end
+
+        # Fallback: if still UnionAll referencing Real/Int/Float via string, attempt float parse
+        st = string(ftype)
+        if occursin("Real", st) || occursin("Float", st) || occursin("Int", st)
+            val = try
+                parse(Float64, raw)
+            catch
+                error("Could not parse numeric-like field $(fname) = $(raw)")
+            end
+            setproperty!(input_tglf, fname, val)
+            continue
+        end
+
+        error("parameter $(fname) of type ($(ftype)) not recognized: $(raw)")
     end
     return input_tglf
 end
