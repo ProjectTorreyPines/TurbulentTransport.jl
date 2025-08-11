@@ -408,21 +408,13 @@ function run_tglfnn(data::Dict; model_filename::String, uncertain::Bool=false, w
     return Dict(name => y[k, :] for (k, name) in enumerate(ynames))
 end
 
-
 if !isdefined(@__MODULE__, :_ort_loaded)
     const _ort_loaded = Ref(false)
 end
-
 if !isdefined(@__MODULE__, :_sess_cache)
-    const _sess_cache = Dict{Tuple{String,Int,Int}, Any}()  # (path, intra, inter)
+    const _sess_cache = Dict{Tuple{String,Int,Int}, Any}()
 end
 
-# local alias for ONNXRunTime; filled on first _load_ort!()
-if !isdefined(@__MODULE__, :ORT)
-    const ORT = nothing
-end
-
-"Set safe defaults only if user didn't set them already."
 function _ensure_onnx_env!()
     if !haskey(ENV, "OMP_NUM_THREADS")
         nt = something(tryparse(Int, get(ENV, "SLURM_CPUS_PER_TASK", "")), 1)
@@ -431,21 +423,15 @@ function _ensure_onnx_env!()
     ENV["OMP_PROC_BIND"] = "false"
     ENV["KMP_AFFINITY"]  = "disabled"
     pop!(ENV, "GOMP_CPU_AFFINITY", nothing)
-    return nothing
 end
 
-"Import ONNXRunTime only after env is finalized."
+"Import ONNXRunTime only after env is finalized (no const alias!)."
 function _load_ort!()
     _ort_loaded[] && return
     @eval import ONNXRunTime
-    if ORT === nothing
-        @eval const ORT = ONNXRunTime  # set alias once
-    end
     _ort_loaded[] = true
-    return nothing
 end
 
-"Resolve model path; accept bare name and add models/ + .onnx if needed."
 function _resolve_model_path(onnx_path::AbstractString)
     if !occursin("/models/", onnx_path)
         onnx_path = joinpath(dirname(@__DIR__), "models",
@@ -456,59 +442,43 @@ function _resolve_model_path(onnx_path::AbstractString)
 end
 
 function load_onnx_model(onnx_path::String; intra_threads::Int=1, inter_threads::Int=1)
-    _ensure_onnx_env!()
-    _load_ort!()
-
-    # Build session options
+    _ensure_onnx_env!(); _load_ort!()
     so = try
-        s = ORT.create_session_options()
-        try ORT.set_intra_op_num_threads!(s, intra_threads) catch end
-        try ORT.set_inter_op_num_threads!(s, inter_threads) catch end
-        try ORT.set_graph_optimization_level!(s, :ORT_ENABLE_ALL) catch end
-        try ORT.set_execution_mode_sequential!(s) catch end
+        s = ONNXRunTime.create_session_options()
+        try ONNXRunTime.set_intra_op_num_threads!(s, intra_threads) catch end
+        try ONNXRunTime.set_inter_op_num_threads!(s, inter_threads) catch end
+        try ONNXRunTime.set_graph_optimization_level!(s, :ORT_ENABLE_ALL) catch end
+        try ONNXRunTime.set_execution_mode_sequential!(s) catch end
         s
     catch
         nothing
     end
-
     onnx_path = _resolve_model_path(onnx_path)
     return isnothing(so) ?
-        ORT.load_inference(ORT.testdatapath(onnx_path)) :
-        ORT.load_inference(ORT.testdatapath(onnx_path); session_options=so)
+        ONNXRunTime.load_inference(ONNXRunTime.testdatapath(onnx_path)) :
+        ONNXRunTime.load_inference(ONNXRunTime.testdatapath(onnx_path); session_options=so)
 end
 
-"""
-    get_onnx_session(onnx_path; intra_threads=1, inter_threads=1)
-
-Build (and cache) an ONNX Runtime session with explicit thread settings.
-Respects existing OMP env if already set by the caller.
-"""
 function get_onnx_session(onnx_path::String; intra_threads::Int=1, inter_threads::Int=1)
-    _ensure_onnx_env!()
-    _load_ort!()
-
+    _ensure_onnx_env!(); _load_ort!()
     onnx_path = _resolve_model_path(onnx_path)
     key = (onnx_path, intra_threads, inter_threads)
     if haskey(_sess_cache, key)
         return _sess_cache[key]
     end
-
-    # SessionOptions
     so = try
-        s = ORT.create_session_options()
-        try ORT.set_intra_op_num_threads!(s, intra_threads) catch end
-        try ORT.set_inter_op_num_threads!(s, inter_threads) catch end
-        try ORT.set_graph_optimization_level!(s, :ORT_ENABLE_ALL) catch end
-        try ORT.set_execution_mode_sequential!(s) catch end
+        s = ONNXRunTime.create_session_options()
+        try ONNXRunTime.set_intra_op_num_threads!(s, intra_threads) catch end
+        try ONNXRunTime.set_inter_op_num_threads!(s, inter_threads) catch end
+        try ONNXRunTime.set_graph_optimization_level!(s, :ORT_ENABLE_ALL) catch end
+        try ONNXRunTime.set_execution_mode_sequential!(s) catch end
         s
     catch
         nothing
     end
-
     sess = isnothing(so) ?
-        ORT.load_inference(ORT.testdatapath(onnx_path)) :
-        ORT.load_inference(ORT.testdatapath(onnx_path); session_options=so)
-
+        ONNXRunTime.load_inference(ONNXRunTime.testdatapath(onnx_path)) :
+        ONNXRunTime.load_inference(ONNXRunTime.testdatapath(onnx_path); session_options=so)
     _sess_cache[key] = sess
     return sess
 end
