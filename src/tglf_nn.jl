@@ -262,9 +262,9 @@ The warn_nn_train_bounds checks against the standard deviation of the inputs to 
 Returns a `flux_solution` structure
 """
 function run_tglfnn(input_tglf::InputTGLF{T}; model_filename::String, uncertain::Bool=false, warn_nn_train_bounds::Bool, fidelity::Symbol=:TGLFNN) where {T<:Real}
-    # In-place transform for sat0quench fpp model
-    if startswith(model_filename, "sat0quench_em_stfpp_azf+1")
-        _apply_sat0quench_transform!(input_tglf; dtf=0.5, device="")
+    # In-place transform for any model containing "stfpp"
+    if occursin("stfpp", model_filename)
+        _apply_stfpp_transform!(input_tglf; dtf=0.5, device="")
     end
     if model_filename in ["sat3_em_d3d_azf-1"] && fidelity == :GKNN
         tglfmod = loadmodelonce(model_filename * "_tglfnn24")
@@ -326,9 +326,9 @@ Returns a vector of `flux_solution` structures
 const log_suffix = "_log10"
 const n_log_suffix = ncodeunits(log_suffix)
 function run_tglfnn(input_tglfs::Vector{InputTGLF{T}}; model_filename::String, uncertain::Bool=false, warn_nn_train_bounds::Bool, fidelity::Symbol=:TGLFNN) where {T<:Real}
-    if startswith(model_filename, "sat0quench_em_stfpp_azf+1")
+    if occursin("stfpp", model_filename)
         for it in input_tglfs
-            _apply_sat0quench_transform!(it; dtf=0.5, device="")
+            _apply_stfpp_transform!(it; dtf=0.5, device="")
         end
     end
     if model_filename in ["sat3_em_d3d_azf-1"] && fidelity == :GKNN
@@ -385,8 +385,8 @@ The warn_nn_train_bounds checks against the standard deviation of the inputs to 
 Returns a dictionary with fluxes
 """
 function run_tglfnn(data::Dict; model_filename::String, uncertain::Bool=false, warn_nn_train_bounds::Bool, fidelity::Symbol=:TGLFNN)
-    if startswith(model_filename, "sat0quench_em_stfpp_azf+1")
-        _apply_sat0quench_transform!(data; dtf=0.5, device="")
+    if occursin("stfpp", model_filename)
+        _apply_stfpp_transform!(data; dtf=0.5, device="")
     end
     if model_filename in ["sat3_em_d3d_azf-1"] && fidelity == :GKNN
         tglfmod = loadmodelonce(model_filename * "_tglfnn24")
@@ -658,11 +658,11 @@ end
 export run_tglfnn, run_tglfnn_onnx
 
 # ------------------------------------------------------------
-# Helper: species splitting transform for sat0quench_em_stfpp_azf+1
+# Helper: species splitting transform for stfpp models
 # Replicates training-time dictionary manipulation for inference.
 # dtf: deuterium-tritium fraction assigned to new AS_2 (remainder to AS_3)
 # device: optional device string ("ukstep" -> NS=4 else NS=5)
-function _apply_sat0quench_transform!(t::InputTGLF; dtf::Float64=0.5, device::AbstractString="")
+function _apply_stfpp_transform!(t::InputTGLF; dtf::Float64=0.5, device::AbstractString="")
     # This mirrors the training-time dictionary manipulation exactly:
     # 1. Rename *_4 -> *_5, *_3 -> *_4, drop original *_5
     # 2. Duplicate *_2 -> *_3
@@ -727,7 +727,7 @@ function _apply_sat0quench_transform!(t::InputTGLF; dtf::Float64=0.5, device::Ab
     return t
 end
 
-function _apply_sat0quench_transform!(data::Dict; dtf::Float64=0.5, device::AbstractString="")
+function _apply_stfpp_transform!(data::Dict; dtf::Float64=0.5, device::AbstractString="")
     # Assume data values are vectors (as in run_tglfnn(dict))
     # Skip if already unbundled: check MASS_3 first element (or scalar) ~ 1.49760 within 1%
     if haskey(data, "MASS_3")
