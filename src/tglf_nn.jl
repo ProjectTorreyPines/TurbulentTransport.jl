@@ -262,6 +262,10 @@ The warn_nn_train_bounds checks against the standard deviation of the inputs to 
 Returns a `flux_solution` structure
 """
 function run_tglfnn(input_tglf::InputTGLF{T}; model_filename::String, uncertain::Bool=false, warn_nn_train_bounds::Bool, fidelity::Symbol=:TGLFNN) where {T<:Real}
+    # In-place transform for sat0quench fpp model
+    if startswith(model_filename, "sat0quench_em_stfpp_azf+1")
+        _apply_sat0quench_transform!(input_tglf; dtf=0.5, device="")
+    end
     if model_filename in ["sat3_em_d3d_azf-1"] && fidelity == :GKNN
         tglfmod = loadmodelonce(model_filename * "_tglfnn24")
     else
@@ -322,6 +326,11 @@ Returns a vector of `flux_solution` structures
 const log_suffix = "_log10"
 const n_log_suffix = ncodeunits(log_suffix)
 function run_tglfnn(input_tglfs::Vector{InputTGLF{T}}; model_filename::String, uncertain::Bool=false, warn_nn_train_bounds::Bool, fidelity::Symbol=:TGLFNN) where {T<:Real}
+    if startswith(model_filename, "sat0quench_em_stfpp_azf+1")
+        for it in input_tglfs
+            _apply_sat0quench_transform!(it; dtf=0.5, device="")
+        end
+    end
     if model_filename in ["sat3_em_d3d_azf-1"] && fidelity == :GKNN
         tglfmod = loadmodelonce(model_filename * "_tglfnn24")
     else
@@ -376,6 +385,9 @@ The warn_nn_train_bounds checks against the standard deviation of the inputs to 
 Returns a dictionary with fluxes
 """
 function run_tglfnn(data::Dict; model_filename::String, uncertain::Bool=false, warn_nn_train_bounds::Bool, fidelity::Symbol=:TGLFNN)
+    if startswith(model_filename, "sat0quench_em_stfpp_azf+1")
+        _apply_sat0quench_transform!(data; dtf=0.5, device="")
+    end
     if model_filename in ["sat3_em_d3d_azf-1"] && fidelity == :GKNN
         tglfmod = loadmodelonce(model_filename * "_tglfnn24")
     else
@@ -644,3 +656,128 @@ function flux_solution(xx::Vararg{T}) where {T<:Real}
 end
 
 export run_tglfnn, run_tglfnn_onnx
+
+# ------------------------------------------------------------
+# Helper: species splitting transform for sat0quench_em_stfpp_azf+1
+# Replicates training-time dictionary manipulation for inference.
+# dtf: deuterium-tritium fraction assigned to new AS_2 (remainder to AS_3)
+# device: optional device string ("ukstep" -> NS=4 else NS=5)
+function _apply_sat0quench_transform!(t::InputTGLF; dtf::Float64=0.5, device::AbstractString="")
+    # This mirrors the training-time dictionary manipulation exactly:
+    # 1. Rename *_4 -> *_5, *_3 -> *_4, drop original *_5
+    # 2. Duplicate *_2 -> *_3
+    # 3. Split AS_2 into AS_2 (dtf) and AS_3 (1-dtf)
+    # 4. Set MASS_2, MASS_3, NS
+    # Skip if already unbundled (MASS_3 already near target ~1.49760 within 1%)
+    try
+        m3 = getfield(t, :MASS_3)
+        if !(m3 === missing) && isfinite(m3) && abs(m3 - 1.49760)/1.49760 < 0.01
+            return t
+        end
+    catch
+        # ignore if field access fails
+    end
+    Tt = typeof(t)
+    orig = Dict{String,Any}(String(f) => getfield(t,f) for f in fieldnames(Tt))
+    temp = Dict{String,Any}()
+    for (key,val) in orig
+        if endswith(key, "_4")
+            temp[replace(key, "_4" => "_5")] = val
+        elseif endswith(key, "_3")
+            temp[replace(key, "_3" => "_4")] = val
+        elseif endswith(key, "_5")
+            continue  # drop original _5
+        else
+            temp[key] = val
+        end
+    end
+    # Duplicate *_2 -> *_3
+    for (key,val) in collect(temp)
+        if occursin("_2", key)
+            temp[replace(key, "_2" => "_3")] = val
+        end
+    end
+    # Remember original AS_2 before splitting (from temp now)
+    if haskey(temp, "AS_2") && temp["AS_2"] !== missing
+        original_as_2 = temp["AS_2"]
+        temp["AS_2"] = original_as_2 * dtf
+        temp["AS_3"] = original_as_2 * (1 - dtf)
+    end
+    # Set masses per spec
+    temp["MASS_2"] = 1.0
+    temp["MASS_3"] = 1.49760170089
+    temp["NS"] = device == "ukstep" ? 4 : 5
+    # Write back to struct fields (missing if dropped)
+    for f in fieldnames(Tt)
+        fname = String(f)
+        if haskey(temp, fname)
+            val = temp[fname]
+            try
+                setfield!(t, f, val)
+            catch
+                # Ignore type mismatch silently
+            end
+        else
+            # If this was a dropped *_5 (original) ensure it's missing
+            if endswith(fname, "_5")
+                try; setfield!(t, f, missing); catch; end
+            end
+        end
+    end
+    return t
+end
+
+function _apply_sat0quench_transform!(data::Dict; dtf::Float64=0.5, device::AbstractString="")
+    # Assume data values are vectors (as in run_tglfnn(dict))
+    # Skip if already unbundled: check MASS_3 first element (or scalar) ~ 1.49760 within 1%
+    if haskey(data, "MASS_3")
+        m3val = data["MASS_3"]
+        m3 = try
+            isa(m3val, AbstractArray) ? m3val[begin] : m3val
+        catch
+            nothing
+        end
+        if m3 isa Number && isfinite(m3) && abs(m3 - 1.49760)/1.49760 < 0.01
+            return data
+        end
+    end
+    tempdict = Dict{String,Any}()
+    for (key,val) in data
+        if endswith(key, "_4")
+            tempdict[replace(key, "_4" => "_5")] = val
+        elseif endswith(key, "_3")
+            tempdict[replace(key, "_3" => "_4")] = val
+        elseif endswith(key, "_5")
+            # skip
+        else
+            tempdict[key] = val
+        end
+    end
+    # Duplicate _2 -> _3
+    for (key,val) in collect(tempdict)
+        if occursin("_2", key)
+            tempdict[replace(key, "_2" => "_3")] = val
+        end
+    end
+    if haskey(tempdict, "AS_2")
+        original_as_2 = tempdict["AS_2"]
+        tempdict["AS_2"] = original_as_2 .* dtf
+        tempdict["AS_3"] = original_as_2 .* (1 - dtf)
+    end
+    N = haskey(tempdict, "AS_2") ? length(tempdict["AS_2"]) : (haskey(tempdict, "AS_1") ? length(tempdict["AS_1"]) : 0)
+    if N > 0
+        tempdict["MASS_2"] = fill(1.0, N)
+        tempdict["MASS_3"] = fill(1.49760170089, N)
+        tempdict["NS"] = fill(device == "ukstep" ? 4 : 5, N)
+    else
+        tempdict["MASS_2"] = 1.0
+        tempdict["MASS_3"] = 1.49760170089
+        tempdict["NS"] = device == "ukstep" ? 4 : 5
+    end
+    # Write back
+    empty!(data)
+    for (k,v) in tempdict
+        data[k] = v
+    end
+    return data
+end
