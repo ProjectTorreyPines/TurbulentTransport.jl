@@ -6,6 +6,9 @@ import StatsBase
 import Measurements
 import BSON
 
+const log_suffix = "_log10"
+const n_log_suffix = ncodeunits(log_suffix)
+
 #= ====================================== =#
 #  structs/constructors for the TGLFmodel
 #= ====================================== =#
@@ -323,8 +326,6 @@ The warn_nn_train_bounds checks against the standard deviation of the inputs to 
 
 Returns a vector of `flux_solution` structures
 """
-const log_suffix = "_log10"
-const n_log_suffix = ncodeunits(log_suffix)
 function run_tglfnn(input_tglfs::Vector{InputTGLF{T}}; model_filename::String, uncertain::Bool=false, warn_nn_train_bounds::Bool, fidelity::Symbol=:TGLFNN) where {T<:Real}
     if occursin("stfpp", model_filename)
         for it in input_tglfs
