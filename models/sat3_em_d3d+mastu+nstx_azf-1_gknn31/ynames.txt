@@ -1,0 +1,8 @@
+OUT_G_elec_qlgyro_sat3_azf-1
+OUT_G_elec_tglf_sat3_azf-1
+OUT_P_ions_qlgyro_sat3_azf-1
+OUT_P_ions_tglf_sat3_azf-1
+OUT_Q_elec_qlgyro_sat3_azf-1
+OUT_Q_elec_tglf_sat3_azf-1
+OUT_Q_ions_qlgyro_sat3_azf-1
+OUT_Q_ions_tglf_sat3_azf-1
