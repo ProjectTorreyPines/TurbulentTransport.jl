@@ -117,7 +117,7 @@ function InputTGLF(
 
     c_s = GACODE.c_s.(Te)
     w0 = @. -cp1d.rotation_frequency_tor_sonic
-    w0p = IMAS.gradient(rmin, w0)
+    w0p = IMAS.gradient(rmin, w0; method=:backward)
     gamma_p = @. @views -Rmaj[gridpoint_cp] * w0p[gridpoint_cp]
     gamma_e = @. @views -rmin[gridpoint_cp] / q * w0p[gridpoint_cp]
     mach = @. @views Rmaj[gridpoint_cp] * w0[gridpoint_cp] / c_s
