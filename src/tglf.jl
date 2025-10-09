@@ -194,7 +194,7 @@ function InputTGLF(
     input_tglf.NKY = 12 # 12 is default, 16 for smoother spectrum
     input_tglf.ALPHA_QUENCH = 0 # 0 = spectral shift, 1 = quench
     input_tglf.SAT_RULE = parse(Int, split(string(sat), "sat")[end])
-    if sat == :sat2 || sat == :sat3
+    if sat == :sat2 || sat == :sat3 || input_tglf.SAT_RULE > 1
         input_tglf.UNITS = "CGYRO"
         input_tglf.KYGRID_MODEL = 4
         input_tglf.NBASIS_MIN = 2
