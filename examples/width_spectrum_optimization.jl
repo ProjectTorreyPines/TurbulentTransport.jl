@@ -139,6 +139,7 @@ function setup_input_file(shot::Int, filepath::String)
     params_to_update["NBASIS_MAX"] = 6
     params_to_update["NKY"] = 9
     params_to_update["UNITS"] = "CGYRO"
+    params_to_update["FIND_WIDTH"] = false
 
     # Update lines in the template
     for i in 1:length(input_lines)
@@ -278,12 +279,12 @@ function optimize_width_spectrum(shot::Int)
     end
 
     # Run baseline to get initial error
-    println("\\nCalculating baseline error...")
+    println("\nCalculating baseline error...")
     baseline_error = objective(x0)
     println("Baseline MSE: $(round(baseline_error, digits=6))")
 
     # Optimize
-    println("\\nStarting optimization...")
+    println("\nStarting optimization...")
     result = optimize(
         objective,
         lower_bounds, upper_bounds, x0, Fminbox(),
@@ -293,14 +294,14 @@ function optimize_width_spectrum(shot::Int)
     optimal_widths = Optim.minimizer(result)
     optimal_error = Optim.minimum(result)
 
-    println("\\n" * "=" ^ 60)
+    println("\n" * "=" ^ 60)
     println("OPTIMIZATION RESULTS")
-    println("=" * 60)
+    println("=" ^ 60)
     println("Optimal MSE: $(round(optimal_error, digits=6))")
     println("Baseline MSE: $(round(baseline_error, digits=6))")
     println("Error reduction: $(round(100*(1 - optimal_error/baseline_error), digits=1))%")
 
-    println("\\nOptimal WIDTH_SPECTRUM values (optimization region only):")
+    println("\nOptimal WIDTH_SPECTRUM values (optimization region only):")
     for i in 1:n_ky_opt
         println("ky = $(round(ky_grid_in[i], digits=3)): WIDTH = $(round(optimal_widths[i], digits=4))")
     end
@@ -403,11 +404,12 @@ function main_fn()
 
     # Save plot
     savefig("width_spectrum_optimization_shot_$shot.png")
-    println("\\nPlot saved as: width_spectrum_optimization_shot_$shot.png")
+    println("\nPlot saved as: width_spectrum_optimization_shot_$shot.png")
 
     return width_spectrum_optimal, result
 end
 
+println("Functions defined: ", names(Main))
+
 # Run the optimization
 width_spectrum_result = main_fn()
-
