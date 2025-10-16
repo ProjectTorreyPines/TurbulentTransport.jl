@@ -193,7 +193,8 @@ function InputTGLF(
     input_tglf.NMODES = input_tglf.NS .+ 2 # capture main branches: ES each species + BPER + VPAR_SHEAR
     input_tglf.NKY = 12 # 12 is default, 16 for smoother spectrum
     input_tglf.ALPHA_QUENCH = 0 # 0 = spectral shift, 1 = quench
-    input_tglf.SAT_RULE = parse(Int, split(string(sat), "sat")[end])
+    input_tglf.SAT_RULE = parse(Int, split(string(sat), "sat")[end][1]) # Parsing will fail for double digit sat rules
+    
     if sat == :sat2 || sat == :sat3
         input_tglf.UNITS = "CGYRO"
         input_tglf.KYGRID_MODEL = 4
