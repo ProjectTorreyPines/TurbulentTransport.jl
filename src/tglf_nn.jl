@@ -357,6 +357,13 @@ function run_tglfnn(input_tglfs::Vector{InputTGLF{T}}; model_filename::String, u
             else
                 value = getfield(input_tglf, Symbol(item))
             end
+            if ismissing(value)
+                hint = ""
+                if occursin("_5", item) || occursin("_6", item)
+                    hint = "\n\nHint: Missing species data (species 5). If using a TGLFNN model (e.g. 'stfpp' models), try setting:\n  act.ActorTGLF.lump_ions = false\nto ensure ion species are treated separately rather than lumped together."
+                end
+                error("TGLFNN input field '$(item)' is Missing at radial location $(i). Check that all required equilibrium and profile data are properly initialized.$(hint)")
+            end
             inputs[k, i] = value
         end
     end
