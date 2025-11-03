@@ -1,38 +1,72 @@
 using Distributed
-using Pkg
 
-# Activate the TurbulentTransport project environment
-Pkg.activate("/global/homes/t/trifolio/.julia/dev/TurbulentTransport")
+# ============================================================================
+# IMPORTANT: IF YOU EDIT @everywhere FUNCTIONS, YOU MUST RESTART JULIA!
+# ============================================================================
+# Workers load function definitions when this script first runs. If you edit
+# any @everywhere function and re-run this file WITHOUT restarting Julia,
+# the workers will still use the OLD code, causing mysterious errors.
+#
+# To apply changes to @everywhere functions:
+#   1. Exit Julia completely
+#   2. Restart Julia
+#   3. Re-run this script
+# ============================================================================
 
-# Add worker processes if not already added
+# Add worker processes FIRST before loading packages
 # You can modify the number based on available cores
 if nprocs() == 1
-    n_workers = 15  # Reduced for "both" parallel mode - increase if using "per_shot" only
+    n_workers = 70  # For full nested parallelism: 4 shots × ~20 ky points
     # Important: Pass the project environment to workers via exeflags
-    # Note: Using default :all_to_all topology for nested parallelism (parallel_mode="both")
-    # For simple per_shot parallelism, you could use topology=:master_worker
-    addprocs(n_workers, exeflags="--project=/global/homes/t/trifolio/.julia/dev/TurbulentTransport")
-    println("Added $n_workers worker processes")
+    # Use all_to_all topology for nested parallelism (required for parallel_mode="both")
+    # This allows workers to communicate with each other, not just the master
+    println("Adding $n_workers worker processes...")
+    addprocs(n_workers,
+             exeflags="--project=/global/homes/t/trifolio/.julia/dev/TurbulentTransport",
+             topology=:all_to_all)  # Changed from :master_worker for nested parallelism
+    println("Added $n_workers worker processes\n")
 end
 
-# Set up Julia environment on all workers to find TurbulentTransport dev package
-@everywhere begin
-    using Pkg
-    # Ensure we're in the right project
-    Pkg.activate("/global/homes/t/trifolio/.julia/dev/TurbulentTransport")
-end
+# Now load packages (must be at top level, after addprocs)
+using Pkg
+Pkg.activate("/global/homes/t/trifolio/.julia/dev/TurbulentTransport")
+
+println("Loading packages on main process (this may take a minute)...")
+using TurbulentTransport
+using JSON
+using Plots
+using LaTeXStrings
+using TJLF
+using Interpolations
+using Optim
+using BlackBoxOptim
+using Statistics
+using DelimitedFiles
+println("Main process packages loaded successfully!\n")
 
 # Load packages on all workers
-@everywhere begin
-    using TurbulentTransport
-    using JSON
-    using Plots
-    using LaTeXStrings
-    using TJLF
-    using Interpolations
-    using Optim
-    using Statistics
-    using DelimitedFiles
+# Using @everywhere loads on all workers in parallel, but since we already
+# precompiled on the main process, this should be fast and not cause conflicts
+if nworkers() > 0
+    println("Loading packages on $(nworkers()) workers...")
+    @everywhere begin
+        using Pkg
+        Pkg.activate("/global/homes/t/trifolio/.julia/dev/TurbulentTransport")
+    end
+
+    @everywhere begin
+        using TurbulentTransport
+        using JSON
+        using Plots
+        using LaTeXStrings
+        using TJLF
+        using Interpolations
+        using Optim
+        using BlackBoxOptim
+        using Statistics
+        using DelimitedFiles
+    end
+    println("All workers ready!\n")
 end
 
 # Load data on all workers
@@ -201,8 +235,30 @@ ZS_3 = 6.0
     return filepath
 end
 
+function to_scalar(val)
+    """Safely convert a value to scalar Float64, handling nested arrays"""
+    result = val
+    while result isa AbstractArray && length(result) >= 1
+        result = result[1]
+    end
+    return Float64(result)
+end
+
+@everywhere function to_scalar(val)
+    """Safely convert a value to scalar Float64, handling nested arrays"""
+    result = val
+    while result isa AbstractArray && length(result) >= 1
+        result = result[1]
+    end
+    return Float64(result)
+end
+
 @everywhere function run_tjlf_with_width_spectrum(input_tjlf, width_spectrum::Vector{Float64})
-    """Run TJLF with a custom WIDTH_SPECTRUM vector"""
+    """Run TJLF with a custom WIDTH_SPECTRUM vector
+
+    Returns:
+        Tuple of (gamma, frequency) arrays for all ky points
+    """
 
     # Create a copy to avoid modifying the original
     input = deepcopy(input_tjlf)
@@ -218,7 +274,10 @@ end
     outputHermite = gauss_hermite(input)
     fluxes, eigenvalue = tjlf_TM(input, satParams, outputHermite)
 
-    return eigenvalue[1, :, 1]  # Return gamma values
+    # Return both gamma (growth rate) and frequency
+    gamma = eigenvalue[1, :, 1]
+    frequency = eigenvalue[1, :, 2]
+    return (gamma, frequency)
 end
 
 @everywhere function optimize_single_ky(
@@ -227,10 +286,17 @@ end
     ky_grid::Vector{Float64},
     cgyro_gamma_target::Float64,
     baseline_width::Float64,
-    lambda::Float64=0.01  # Regularization parameter
+    lambda::Float64=0.01;  # Regularization parameter
+    _version::Int=3  # Version marker to force recompilation - INCREMENT THIS WHEN DEBUGGING
 )
     """
-    Optimize WIDTH for a single ky point (1D optimization with regularization)
+    VERSION: 2024-10-22-v3 - Added version parameter to force worker recompilation
+
+    Optimize WIDTH for a single ky point using GLOBAL optimization (Differential Evolution)
+
+    This version uses BlackBoxOptim.jl with differential evolution to avoid getting
+    stuck in local minima. The WIDTH vs gamma relationship in TJLF is highly non-monotonic
+    with multiple local minima, so global optimization is essential.
 
     Args:
         ky_index: Index of the ky point to optimize
@@ -246,7 +312,14 @@ end
         Optimal WIDTH value for this ky point, optimal error
     """
 
+    println("*** FUNCTION ENTRY: optimize_single_ky v3 called for ky_index=$ky_index ***")
+    flush(stdout)  # Force output immediately
+
     n_ky_total = length(ky_grid)
+
+    # Track best solution ourselves to avoid BlackBoxOptim's vector-to-scalar issues
+    best_width = Ref(baseline_width)
+    best_error = Ref(Inf)
 
     # Objective function for this single ky point with regularization
     function objective_1d(width_value)
@@ -256,7 +329,7 @@ end
 
         # Run TJLF
         try
-            gamma_tjlf = run_tjlf_with_width_spectrum(input_tjlf, width_spectrum)
+            gamma_tjlf, freq_tjlf = run_tjlf_with_width_spectrum(input_tjlf, width_spectrum)
             gamma_this_ky = gamma_tjlf[ky_index]
 
             # CRITICAL FIX: Penalize cases where TJLF returns gamma=0
@@ -276,6 +349,13 @@ end
             regularization = lambda * ((width_value - baseline_width) / baseline_width)^2
 
             total_error = mse + regularization
+
+            # Track best solution ourselves
+            if total_error < best_error[]
+                best_error[] = total_error
+                best_width[] = width_value
+            end
+
             return total_error
         catch e
             return 1e10  # Return large error if TJLF fails
@@ -286,13 +366,45 @@ end
     lower = 0.1 * baseline_width
     upper = 10.0 * baseline_width
 
-    # Use Brent's method for 1D optimization (much faster than multi-dimensional)
-    result = optimize(objective_1d, lower, upper, Brent())
+    # WORKAROUND: Use grid search + local refinement instead of BlackBoxOptim
+    # BlackBoxOptim 0.6.3 has internal vector-to-scalar conversion issues with Julia 1.11.4
+    # Grid search provides global exploration, then refine locally
+    println("DEBUG ky=$ky_index: Starting grid search optimization")
+    flush(stdout)
 
-    optimal_width = Optim.minimizer(result)
-    optimal_error = Optim.minimum(result)
+    # Phase 1: Coarse grid search (global exploration)
+    n_grid = 20
+    grid_points = range(lower, upper, length=n_grid)
+    for width_val in grid_points
+        objective_1d(width_val)  # This updates best_width[] and best_error[]
+    end
 
-    return optimal_width, optimal_error
+    println("DEBUG ky=$ky_index: Grid search complete, best so far: width=$(best_width[]), error=$(best_error[])")
+    flush(stdout)
+
+    # Phase 2: Fine grid search around best point
+    if best_error[] < Inf
+        # Search +/- 20% around best point
+        refine_lower = max(lower, best_width[] * 0.8)
+        refine_upper = min(upper, best_width[] * 1.2)
+        refine_points = range(refine_lower, refine_upper, length=n_grid)
+        for width_val in refine_points
+            objective_1d(width_val)
+        end
+    end
+
+    println("DEBUG ky=$ky_index: Refinement complete")
+    flush(stdout)
+
+    # Use our tracked best solution
+    width_out = Float64(best_width[])
+    error_out = Float64(best_error[])
+
+    println("DEBUG ky=$ky_index: Returning width=$width_out, error=$error_out")
+    flush(stdout)
+
+    # Return as tuple
+    return (width_out, error_out)
 end
 
 @everywhere function optimize_width_spectrum_per_ky(
@@ -344,6 +456,22 @@ end
     # Get CGYRO data
     ky_cgyro = Float64.(data["cgyro_growthrate_spectra"][shot][1])
     cgyro_gamma = Float64.(data["cgyro_growthrate_spectra"][shot][2])
+    cgyro_freq = Float64.(data["cgyro_growthrate_spectra"][shot][3])
+
+    # Check for insufficient CGYRO data
+    n_cgyro_points = length(ky_cgyro)
+    if n_cgyro_points < 2
+        println("WARNING: Shot $shot has insufficient CGYRO data (only $n_cgyro_points points)")
+        println("         Skipping optimization for this shot - need at least 2 points for interpolation")
+        println("=" ^ 60)
+        # Return baseline WIDTH spectrum (no optimization)
+        baseline_width = input_tjlf.WIDTH
+        width_spectrum_optimal = fill(baseline_width, length(input_tjlf.KY_SPECTRUM))
+        result = (converged=false, iterations=0, minimum=Inf)
+        return width_spectrum_optimal, Float64[], Float64[], result, input_tjlf, Bool[], Float64[], Float64[]
+    end
+
+    println("CGYRO data: $n_cgyro_points points covering ky ∈ [$(round(minimum(ky_cgyro), digits=3)), $(round(maximum(ky_cgyro), digits=3))]")
 
     # Setup optimization domain
     ky_grid = input_tjlf.KY_SPECTRUM
@@ -377,13 +505,30 @@ end
     n_ky_opt = length(ky_grid_in)
     opt_indices = findall(mask)
 
+    # Check if we have any ky points to optimize after filtering
+    if n_ky_opt == 0
+        println("WARNING: No ky points to optimize after filtering for Shot $shot")
+        println("         CGYRO range: [$(round(minimum(ky_cgyro), digits=3)), $(round(maximum(ky_cgyro), digits=3))]")
+        println("         TJLF ky_grid range: [$(round(minimum(ky_grid), digits=3)), $(round(maximum(ky_grid), digits=3))]")
+        println("         Skipping optimization for this shot")
+        println("=" ^ 60)
+        # Return baseline WIDTH spectrum (no optimization)
+        baseline_width = input_tjlf.WIDTH
+        width_spectrum_optimal = fill(baseline_width, length(ky_grid))
+        result = (converged=false, iterations=0, minimum=Inf)
+        return width_spectrum_optimal, Float64[], Float64[], result, input_tjlf, mask, Float64[], Float64[]
+    end
+
     println("Total ky points: $(length(ky_grid))")
     println("Optimization ky points: $n_ky_opt")
     println("Optimization ky range: $(round(minimum(ky_grid_in), digits=3)) to $(round(maximum(ky_grid_in), digits=3))")
 
-    # Interpolate CGYRO gamma onto TJLF grid
-    itp = interpolate((ky_cgyro,), cgyro_gamma, Gridded(Linear()))
-    cgyro_gamma_interp = itp.(ky_grid_in)
+    # Interpolate CGYRO gamma and frequency onto TJLF grid
+    itp_gamma = interpolate((ky_cgyro,), cgyro_gamma, Gridded(Linear()))
+    cgyro_gamma_interp = itp_gamma.(ky_grid_in)
+
+    itp_freq = interpolate((ky_cgyro,), cgyro_freq, Gridded(Linear()))
+    cgyro_freq_interp = itp_freq.(ky_grid_in)
 
     # Get baseline WIDTH value
     baseline_width = input_tjlf.WIDTH
@@ -413,8 +558,18 @@ end
     elapsed_time = time() - start_time
 
     # Extract optimal widths and errors
-    optimal_widths = [r[1] for r in results]
-    optimal_errors = [r[2] for r in results]
+    # CRITICAL FIX: Manually unwrap arrays in case workers don't have to_scalar
+    # This is a failsafe for distributed computing issues
+    function safe_extract(val)
+        v = val
+        while v isa AbstractArray && length(v) >= 1
+            v = v[1]
+        end
+        return Float64(v)
+    end
+
+    optimal_widths = [safe_extract(r[1]) for r in results]
+    optimal_errors = [safe_extract(r[2]) for r in results]
 
     # Create full WIDTH_SPECTRUM
     width_spectrum_optimal = fill(baseline_width, length(ky_grid))
@@ -425,7 +580,7 @@ end
 
     # Calculate baseline error for comparison
     baseline_width_spectrum = fill(baseline_width, length(ky_grid))
-    gamma_baseline = run_tjlf_with_width_spectrum(input_tjlf, baseline_width_spectrum)
+    gamma_baseline, freq_baseline = run_tjlf_with_width_spectrum(input_tjlf, baseline_width_spectrum)
     baseline_mse = mean((gamma_baseline[mask] .- cgyro_gamma_interp).^2)
 
     println("\n" * "=" ^ 60)
@@ -444,7 +599,7 @@ end
     # Create a simple result object for compatibility
     result = (converged=true, iterations=elapsed_time, minimum=total_error/n_ky_opt)
 
-    return width_spectrum_optimal, optimal_widths, ky_grid_in, result, input_tjlf, mask, cgyro_gamma_interp
+    return width_spectrum_optimal, optimal_widths, ky_grid_in, result, input_tjlf, mask, cgyro_gamma_interp, cgyro_freq_interp
 end
 
 @everywhere function optimize_width_spectrum(
@@ -560,7 +715,7 @@ end
 
         # Run TJLF with this WIDTH_SPECTRUM
         try
-            gamma_tjlf = run_tjlf_with_width_spectrum(input_tjlf, width_spectrum_full)
+            gamma_tjlf, freq_tjlf = run_tjlf_with_width_spectrum(input_tjlf, width_spectrum_full)
             gamma_tjlf_opt = gamma_tjlf[mask]
 
             # Calculate MSE
@@ -608,6 +763,130 @@ end
     return width_spectrum_optimal, optimal_widths, ky_grid_in, result, input_tjlf, mask, cgyro_gamma_interp
 end
 
+function save_combined_results(results_dict::Dict, output_dir::String="width_spec_opt_grid")
+    """
+    Save combined results from all shots to a single JSON file in nested dictionary format
+
+    Args:
+        results_dict: Dictionary mapping shot_id to optimization results tuple
+        output_dir: Output directory path
+
+    Output format matches qlnn_training_subset_merged_result_dict_dmn36p5_dict.json:
+        - Top-level keys are field names
+        - Each field is a vector indexed by shot
+        - Most fields contain nested vectors (one per shot, containing values per ky point)
+    """
+    mkpath(output_dir)
+
+    # Initialize nested dictionary structure
+    combined_data = Dict(
+        "id" => [],
+        "ky_grid" => [],
+        "width_baseline" => [],
+        "width_optimized_spectrum" => [],
+        "gamma_cgyro" => [],
+        "gamma_baseline" => [],
+        "gamma_optimized" => [],
+        "freq_cgyro" => [],
+        "freq_baseline" => [],
+        "freq_optimized" => [],
+        "error_gamma_baseline" => [],
+        "error_gamma_optimized" => []
+    )
+
+    # Process shots in sorted order for consistent indexing
+    for shot in sort(collect(keys(results_dict)))
+        result_tuple = results_dict[shot]
+        width_spectrum_optimal, optimal_widths, ky_grid_in, result, input_tjlf, mask, cgyro_gamma_interp, cgyro_freq_interp = result_tuple
+
+        # Skip shots that were not optimized (insufficient data)
+        if isempty(optimal_widths)
+            println("  Skipping Shot $shot in output (insufficient CGYRO data)")
+            continue
+        end
+
+        # Get CGYRO data
+        ky_cgyro = Float64.(data["cgyro_growthrate_spectra"][shot][1])
+        cgyro_gamma = Float64.(data["cgyro_growthrate_spectra"][shot][2])
+        cgyro_freq = Float64.(data["cgyro_growthrate_spectra"][shot][3])
+
+        # Skip if insufficient CGYRO data for interpolation
+        if length(ky_cgyro) < 2
+            println("  Skipping Shot $shot in output (insufficient CGYRO data for interpolation)")
+            continue
+        end
+
+        # Run TJLF with baseline and optimized widths
+        ky_grid = input_tjlf.KY_SPECTRUM
+        baseline_width_spectrum = fill(input_tjlf.WIDTH, length(ky_grid))
+
+        gamma_baseline, freq_baseline = run_tjlf_with_width_spectrum(input_tjlf, baseline_width_spectrum)
+        gamma_optimized, freq_optimized = run_tjlf_with_width_spectrum(input_tjlf, width_spectrum_optimal)
+
+        # Interpolate CGYRO data onto full TJLF grid
+        itp_gamma = interpolate((ky_cgyro,), cgyro_gamma, Gridded(Linear()))
+        itp_freq = interpolate((ky_cgyro,), cgyro_freq, Gridded(Linear()))
+
+        # Build vectors for this shot (only include ky points within CGYRO range)
+        ky_vec = Float64[]
+        width_baseline_vec = Float64[]
+        width_optimized_vec = Float64[]
+        gamma_cgyro_vec = Float64[]
+        gamma_baseline_vec = Float64[]
+        gamma_optimized_vec = Float64[]
+        freq_cgyro_vec = Float64[]
+        freq_baseline_vec = Float64[]
+        freq_optimized_vec = Float64[]
+        error_gamma_baseline_vec = Float64[]
+        error_gamma_optimized_vec = Float64[]
+
+        for (idx, ky) in enumerate(ky_grid)
+            # Only include ky points within CGYRO range
+            if ky >= minimum(ky_cgyro) && ky <= maximum(ky_cgyro)
+                cgyro_gamma_val = itp_gamma(ky)
+                cgyro_freq_val = itp_freq(ky)
+
+                push!(ky_vec, ky)
+                push!(width_baseline_vec, input_tjlf.WIDTH)
+                push!(width_optimized_vec, width_spectrum_optimal[idx])
+                push!(gamma_cgyro_vec, cgyro_gamma_val)
+                push!(gamma_baseline_vec, gamma_baseline[idx])
+                push!(gamma_optimized_vec, gamma_optimized[idx])
+                push!(freq_cgyro_vec, cgyro_freq_val)
+                push!(freq_baseline_vec, freq_baseline[idx])
+                push!(freq_optimized_vec, freq_optimized[idx])
+                push!(error_gamma_baseline_vec, (gamma_baseline[idx] - cgyro_gamma_val)^2)
+                push!(error_gamma_optimized_vec, (gamma_optimized[idx] - cgyro_gamma_val)^2)
+            end
+        end
+
+        # Append shot data to combined structure
+        push!(combined_data["id"], data["id"][shot])
+        push!(combined_data["ky_grid"], ky_vec)
+        push!(combined_data["width_baseline"], width_baseline_vec)
+        push!(combined_data["width_optimized_spectrum"], width_optimized_vec)
+        push!(combined_data["gamma_cgyro"], gamma_cgyro_vec)
+        push!(combined_data["gamma_baseline"], gamma_baseline_vec)
+        push!(combined_data["gamma_optimized"], gamma_optimized_vec)
+        push!(combined_data["freq_cgyro"], freq_cgyro_vec)
+        push!(combined_data["freq_baseline"], freq_baseline_vec)
+        push!(combined_data["freq_optimized"], freq_optimized_vec)
+        push!(combined_data["error_gamma_baseline"], error_gamma_baseline_vec)
+        push!(combined_data["error_gamma_optimized"], error_gamma_optimized_vec)
+    end
+
+    # Save to JSON
+    json_path = joinpath(output_dir, "combined_results.json")
+    open(json_path, "w") do f
+        JSON.print(f, combined_data, 4)
+    end
+
+    println("Saved combined results to: $json_path")
+    println("  Format: Nested dictionary with $(length(combined_data["id"])) shots")
+    println("  Structure matches qlnn_training_subset_merged_result_dict_dmn36p5_dict.json")
+    return json_path
+end
+
 function save_optimization_results(shot::Int, width_spectrum_optimal, optimal_widths, ky_grid_in,
                                    input_tjlf, mask, cgyro_gamma_interp, result, output_prefix="width_optimization")
     """Save optimization results to JSON and CSV files in organized folder structure"""
@@ -623,8 +902,8 @@ function save_optimization_results(shot::Int, width_spectrum_optimal, optimal_wi
 
     # Run baseline and optimized TJLF
     baseline_width_spectrum = fill(input_tjlf.WIDTH, length(ky_grid))
-    gamma_baseline = run_tjlf_with_width_spectrum(input_tjlf, baseline_width_spectrum)
-    gamma_optimized = run_tjlf_with_width_spectrum(input_tjlf, width_spectrum_optimal)
+    gamma_baseline, freq_baseline = run_tjlf_with_width_spectrum(input_tjlf, baseline_width_spectrum)
+    gamma_optimized, freq_optimized = run_tjlf_with_width_spectrum(input_tjlf, width_spectrum_optimal)
 
     # Calculate errors
     baseline_mse = mean((gamma_baseline[mask] .- cgyro_gamma_interp).^2)
@@ -703,8 +982,8 @@ function save_optimization_results(shot::Int, width_spectrum_optimal, optimal_wi
     return shot_dir, json_filename, csv_filename
 end
 
-function plot_width_spectrum_results(shot::Int, width_spectrum_optimal, optimal_widths, ky_grid_in, input_tjlf, mask, cgyro_gamma_interp)
-    """Plot the optimization results"""
+function plot_gamma_comparison(shot::Int, width_spectrum_optimal, ky_grid_in, input_tjlf)
+    """Plot gamma (growth rate) comparison between CGYRO, baseline TJLF, and optimized TJLF"""
 
     # Get CGYRO data for plotting
     ky_cgyro = Float64.(data["cgyro_growthrate_spectra"][shot][1])
@@ -713,13 +992,13 @@ function plot_width_spectrum_results(shot::Int, width_spectrum_optimal, optimal_
 
     # Run baseline TJLF
     baseline_width_spectrum = fill(input_tjlf.WIDTH, length(ky_grid))
-    gamma_baseline = run_tjlf_with_width_spectrum(input_tjlf, baseline_width_spectrum)
+    gamma_baseline, freq_baseline = run_tjlf_with_width_spectrum(input_tjlf, baseline_width_spectrum)
 
     # Run optimized TJLF
-    gamma_optimized = run_tjlf_with_width_spectrum(input_tjlf, width_spectrum_optimal)
+    gamma_optimized, freq_optimized = run_tjlf_with_width_spectrum(input_tjlf, width_spectrum_optimal)
 
-    # Create main comparison plot
-    plt1 = plot(
+    # Create gamma comparison plot
+    plt = plot(
         ky_cgyro, cgyro_gamma,
         label = "CGYRO data",
         marker = :circle,
@@ -730,12 +1009,13 @@ function plot_width_spectrum_results(shot::Int, width_spectrum_optimal, optimal_
         yscale = :log10,
         ylims = (1e-4, Inf),
         xlabel = L"k_y",
-        ylabel = L"\\gamma",
-        title = "WIDTH_SPECTRUM Optimization Results - Shot $shot"
+        ylabel = L"\gamma",
+        title = "Growth Rate Comparison - Shot $shot",
+        size = (800, 600)
     )
 
     # Plot baseline TJLF
-    plot!(plt1, ky_grid, gamma_baseline,
+    plot!(plt, ky_grid, gamma_baseline,
         label = "TJLF baseline (WIDTH=$(round(input_tjlf.WIDTH, digits=2)))",
         linestyle = :dash,
         alpha = 0.7,
@@ -743,7 +1023,7 @@ function plot_width_spectrum_results(shot::Int, width_spectrum_optimal, optimal_
     )
 
     # Plot optimized TJLF
-    plot!(plt1, ky_grid, gamma_optimized,
+    plot!(plt, ky_grid, gamma_optimized,
         label = "TJLF optimized WIDTH_SPECTRUM",
         marker = :diamond,
         lw = 2,
@@ -751,33 +1031,109 @@ function plot_width_spectrum_results(shot::Int, width_spectrum_optimal, optimal_
     )
 
     # Highlight optimization region
-    vline!(plt1, [minimum(ky_grid_in)], linestyle = :dot, color = :gray, alpha = 0.5, label = "")
-    vline!(plt1, [maximum(ky_grid_in)], linestyle = :dot, color = :gray, alpha = 0.5, label = "")
+    if !isempty(ky_grid_in)
+        vline!(plt, [minimum(ky_grid_in)], linestyle = :dot, color = :gray, alpha = 0.5, label = "")
+        vline!(plt, [maximum(ky_grid_in)], linestyle = :dot, color = :gray, alpha = 0.5, label = "")
+    end
 
-    # Create WIDTH_SPECTRUM plot
-    plt2 = plot(
-        ky_grid, width_spectrum_optimal,
-        label = "Optimized WIDTH_SPECTRUM",
+    return plt
+end
+
+function plot_frequency_comparison(shot::Int, width_spectrum_optimal, ky_grid_in, input_tjlf)
+    """Plot frequency comparison between CGYRO, baseline TJLF, and optimized TJLF
+
+    Includes automatic sign-flip detection: if TJLF and CGYRO frequencies have opposite
+    signs at high ky (last 2-3 points), TJLF frequencies are flipped for better agreement.
+    """
+
+    # Get CGYRO data for plotting
+    ky_cgyro = Float64.(data["cgyro_growthrate_spectra"][shot][1])
+    cgyro_freq = Float64.(data["cgyro_growthrate_spectra"][shot][3])
+    ky_grid = input_tjlf.KY_SPECTRUM
+
+    # Run baseline TJLF
+    baseline_width_spectrum = fill(input_tjlf.WIDTH, length(ky_grid))
+    gamma_baseline, freq_baseline = run_tjlf_with_width_spectrum(input_tjlf, baseline_width_spectrum)
+
+    # Run optimized TJLF
+    gamma_optimized, freq_optimized = run_tjlf_with_width_spectrum(input_tjlf, width_spectrum_optimal)
+
+    # Interpolate CGYRO frequencies onto TJLF grid for sign comparison
+    itp_freq = interpolate((ky_cgyro,), cgyro_freq, Gridded(Linear()))
+
+    # Check sign agreement at high ky (last 2-3 points in the ky_grid)
+    # Only check points within CGYRO range
+    n_check = min(3, length(ky_grid))
+    high_ky_indices = []
+    for i in (length(ky_grid) - n_check + 1):length(ky_grid)
+        if ky_grid[i] >= minimum(ky_cgyro) && ky_grid[i] <= maximum(ky_cgyro)
+            push!(high_ky_indices, i)
+        end
+    end
+
+    sign_flip_needed = false
+    if !isempty(high_ky_indices) && length(high_ky_indices) >= 2
+        # Compare signs at high ky points
+        cgyro_signs = [sign(itp_freq(ky_grid[i])) for i in high_ky_indices]
+        tjlf_baseline_signs = [sign(freq_baseline[i]) for i in high_ky_indices]
+        tjlf_opt_signs = [sign(freq_optimized[i]) for i in high_ky_indices]
+
+        # If majority of TJLF signs disagree with CGYRO, flip the sign
+        baseline_disagree = sum(cgyro_signs .!= tjlf_baseline_signs) > length(high_ky_indices) / 2
+        opt_disagree = sum(cgyro_signs .!= tjlf_opt_signs) > length(high_ky_indices) / 2
+
+        if baseline_disagree || opt_disagree
+            sign_flip_needed = true
+            freq_baseline = -freq_baseline
+            freq_optimized = -freq_optimized
+            println("  Note: Sign flip applied to TJLF frequencies for Shot $shot (high-ky sign mismatch detected)")
+        end
+    end
+
+    # Create frequency comparison plot
+    # Note: Frequency can be positive or negative (direction of rotation)
+    # So we use log scale only for x-axis (ky), not y-axis
+    title_suffix = sign_flip_needed ? " (TJLF sign flipped)" : ""
+    plt = plot(
+        ky_cgyro, cgyro_freq,
+        label = "CGYRO data",
         marker = :circle,
         lw = 2,
-        xlabel = L"k_y",
-        ylabel = "WIDTH value",
-        title = "Optimized WIDTH_SPECTRUM vs ky",
+        legend = :best,
+        fontfamily = "Computer Modern",
         xscale = :log10,
-        legend = :best
+        xlabel = L"k_y",
+        ylabel = L"\omega",
+        title = "Frequency Comparison - Shot $shot" * title_suffix,
+        size = (800, 600)
     )
 
-    # Show baseline WIDTH as horizontal line
-    hline!(plt2, [input_tjlf.WIDTH], label = "Baseline WIDTH", linestyle = :dash, alpha = 0.7)
+    # Plot baseline TJLF
+    plot!(plt, ky_grid, freq_baseline,
+        label = "TJLF baseline (WIDTH=$(round(input_tjlf.WIDTH, digits=2)))",
+        linestyle = :dash,
+        alpha = 0.7,
+        lw = 2
+    )
+
+    # Plot optimized TJLF
+    plot!(plt, ky_grid, freq_optimized,
+        label = "TJLF optimized WIDTH_SPECTRUM",
+        marker = :diamond,
+        lw = 2,
+        color = :red
+    )
+
+    # Add horizontal line at zero for reference
+    hline!(plt, [0.0], linestyle = :dot, color = :black, alpha = 0.3, label = "")
 
     # Highlight optimization region
-    vline!(plt2, [minimum(ky_grid_in)], linestyle = :dot, color = :gray, alpha = 0.5, label = "")
-    vline!(plt2, [maximum(ky_grid_in)], linestyle = :dot, color = :gray, alpha = 0.5, label = "")
+    if !isempty(ky_grid_in)
+        vline!(plt, [minimum(ky_grid_in)], linestyle = :dot, color = :gray, alpha = 0.5, label = "")
+        vline!(plt, [maximum(ky_grid_in)], linestyle = :dot, color = :gray, alpha = 0.5, label = "")
+    end
 
-    # Combine plots
-    combined_plot = plot(plt1, plt2, layout = (2, 1), size = (800, 800))
-
-    return combined_plot
+    return plt
 end
 
 # Main execution (single shot)
@@ -889,15 +1245,15 @@ function main_parallel(
         )
     elseif parallel_mode == "both"
         # This uses per-ky optimization for each shot, and parallelizes across shots
-        # Uses sequential processing WITHIN each shot to avoid nested parallelism issues
-        println("Using hybrid parallelization: per-shot (parallel) + per-ky (sequential)")
-        println("Note: Each shot processes ky points sequentially to avoid worker communication issues")
+        # FULL NESTED PARALLELISM: Parallelizes both across shots AND within each shot
+        println("Using FULL nested parallelization: per-shot (parallel) + per-ky (parallel)")
+        println("Note: Requires many workers (~80 for 4 shots × 20 ky points)")
         optimize_func = shot -> optimize_width_spectrum_per_ky(shot;
             ky_filter_mode=ky_filter_mode,
             ky_threshold_low=ky_threshold_low,
             ky_threshold_high=ky_threshold_high,
             lambda=lambda,
-            use_parallel=false  # Disable inner parallelism to avoid nested pmap issues
+            use_parallel=true  # Enable full nested parallelism
         )
     else
         error("Unknown parallel_mode: $parallel_mode. Use 'per_shot', 'per_ky', or 'both'")
@@ -930,84 +1286,77 @@ function main_parallel(
         results_dict[shot] = results[i]
     end
 
-    # Save data files and generate plots for all shots
-    println("\nSaving results and generating plots for all shots...")
+    # Save combined results to single JSON file
+    println("\nSaving combined results...")
+    output_dir = "width_spec_opt_grid"
+    save_combined_results(results_dict, output_dir)
+
+    # Generate plots for all shots
+    println("\nGenerating plots for all shots...")
+    shot_figs_dir = joinpath(output_dir, "shot_figs")
+    mkpath(shot_figs_dir)
+
     for shot in shots
-        width_spectrum_optimal, optimal_widths, ky_grid_in, result, input_tjlf, mask, cgyro_gamma_interp = results_dict[shot]
+        width_spectrum_optimal, optimal_widths, ky_grid_in, result, input_tjlf, mask, cgyro_gamma_interp, cgyro_freq_interp = results_dict[shot]
 
-        # Save data files
+        # Skip plotting for shots with insufficient data
+        if isempty(optimal_widths)
+            println("\nShot $shot: Skipped (insufficient CGYRO data)")
+            continue
+        end
+
         println("\nShot $shot:")
-        shot_dir, _, _ = save_optimization_results(shot, width_spectrum_optimal, optimal_widths, ky_grid_in,
-                                                    input_tjlf, mask, cgyro_gamma_interp, result)
 
-        # Generate and save plot to shot directory
-        plt = plot_width_spectrum_results(shot, width_spectrum_optimal, optimal_widths, ky_grid_in, input_tjlf, mask, cgyro_gamma_interp)
-        plot_filename = joinpath(shot_dir, "optimization_plot.png")
-        savefig(plot_filename)
-        println("  Saved: $plot_filename")
+        # Generate and save gamma comparison plot
+        plt_gamma = plot_gamma_comparison(shot, width_spectrum_optimal, ky_grid_in, input_tjlf)
+        gamma_filename = joinpath(shot_figs_dir, "shot_$(shot)_gamma.png")
+        savefig(plt_gamma, gamma_filename)
+        println("  Saved: $gamma_filename")
+
+        # Generate and save frequency comparison plot
+        plt_freq = plot_frequency_comparison(shot, width_spectrum_optimal, ky_grid_in, input_tjlf)
+        freq_filename = joinpath(shot_figs_dir, "shot_$(shot)_frequency.png")
+        savefig(plt_freq, freq_filename)
+        println("  Saved: $freq_filename")
     end
+
+    println("\n" * "=" ^ 80)
+    println("All results saved to: $output_dir")
+    println("  - Combined data: combined_results.json")
+    println("  - Figures: shot_figs/")
+    println("=" ^ 80)
 
     return results_dict
 end
 
-println("Functions defined: ", names(Main))
+println("Functions defined successfully!")
+println("Worker count: $(nworkers())")
+println("SCRIPT VERSION: 2024-10-22-v4-grid (restructured output with frequency data)")
+println("=" ^ 60)
+
+# Verify that workers have the updated function
+println("\nVerifying workers have loaded the updated code...")
+test_result = @fetchfrom 2 begin
+    hasmethod(optimize_single_ky, Tuple{Int, Any, Vector{Float64}, Float64, Float64, Float64}) ||
+    hasmethod(optimize_single_ky, (Int, Any, Vector{Float64}, Float64, Float64, Float64))
+end
+println("Worker 2 has optimize_single_ky function: $test_result")
+println("If false, workers haven't loaded the new code - restart Julia!")
+println("=" ^ 60)
 
 # ============================================================================
 # EXECUTION EXAMPLES
 # ============================================================================
 
-# Choose execution mode, ky filtering options, and parallelization strategy:
-
-# ----------------------------------------------------------------------------
-# Option 1: Single shot (sequential or with per-ky parallelization)
-# ----------------------------------------------------------------------------
-# Joint optimization (default, original method)
-# width_spectrum_result = main_fn(shot=11)  # Default: ky < 0.8, joint optimization
-
-# Per-ky parallel optimization (MUCH FASTER if ky modes are independent!)
-# width_spectrum_result = main_fn(shot=11, parallel_mode="per_ky")  # Parallelize across ky points
-
-# With different ky filtering
-# width_spectrum_result = main_fn(shot=11, parallel_mode="per_ky", ky_filter_mode="full")  # Full CGYRO range
-# width_spectrum_result = main_fn(shot=11, parallel_mode="per_ky", ky_filter_mode="less_than", ky_threshold_high=0.5)  # ky < 0.5
-
-# ----------------------------------------------------------------------------
-# Option 2: Multiple shots in parallel (DEFAULT)
-# ----------------------------------------------------------------------------
-shots_to_optimize = [8,10,11,12]  # Modify this list as needed
-
-# Example 1: Parallelize across shots (default, original behavior)
-# Each shot uses joint optimization (optimizes all ky together)
-# width_spectrum_results = main_parallel(shots_to_optimize, parallel_mode="per_shot")
-
-# Example 2: Per-ky optimization for a single shot
-# Parallelizes across ky points for ONE shot (uses only first shot if multiple given)
-# RECOMMENDED if you have ~10-20 workers available
-# width_spectrum_results = main_parallel(shots_to_optimize, parallel_mode="per_ky")
-
-# Example 3: Hybrid parallelization (per-shot AND per-ky)
-# Parallelizes across shots, and within each shot parallelizes across ky
-# RECOMMENDED if you have 50+ workers available (e.g., on a large HPC cluster)
-# width_spectrum_results = main_parallel(shots_to_optimize, parallel_mode="both")
-
-# ----------------------------------------------------------------------------
-# Examples with different ky filtering
-# ----------------------------------------------------------------------------
-
-# Full ky range with per-ky parallelization
-# width_spectrum_results = main_parallel(shots_to_optimize, parallel_mode="per_ky", ky_filter_mode="full")
-
-# Custom ky threshold with per-shot parallelization
-# width_spectrum_results = main_parallel(shots_to_optimize, parallel_mode="per_shot", ky_filter_mode="less_than", ky_threshold_high=0.5)
-
-# High ky only with hybrid parallelization
-# width_spectrum_results = main_parallel(shots_to_optimize, parallel_mode="both", ky_filter_mode="greater_than", ky_threshold_low=0.3)
-
-# Specific ky range with per-shot parallelization
-# width_spectrum_results = main_parallel(shots_to_optimize, parallel_mode="per_shot", ky_filter_mode="both", ky_threshold_low=0.2, ky_threshold_high=0.6)
+shots_to_optimize = collect(1:20)
+# Alternative options:
+# shots_to_optimize = [1,15,8,10,11,12]  # Specific shots
+# shots_to_optimize = 1:20  # Range (also works, but collect() is clearer)
+# shots_to_optimize = collect(1:10)  # First 10 shots
+# shots_to_optimize = collect(11:20)  # Last 10 shots
 
 width_spectrum_results = main_parallel(shots_to_optimize,
     parallel_mode="both",
     ky_filter_mode="full",
-    lambda=0.0 
-    )
+    lambda=0.0
+)
