@@ -2,18 +2,27 @@
 # WIDTH_SPECTRUM Optimization with 4-Component QL Weights Cost Function
 # VERSION: 2024-10-31-v3-asinh-direct
 #
-# Cost function: 50% gamma + 50% QL weights (16.67% each: Γ_e, Q_e, Q_ions)
 # Per-ky optimization using raw QL_weights (not flux_out with intensities)
 # asinh applied directly to values: loss = (asinh(TJLF) - asinh(CGYRO))^2
 #
 # IMPORTANT: If you edit @everywhere functions, restart Julia to reload workers
 # ============================================================================
 
+# ============================================================================
+# COST FUNCTION WEIGHT CONFIGURATION
+# ============================================================================
+# Set gamma weight (0.0 to 1.0). Remaining weight distributed to QL weights
+# Example: GAMMA_WEIGHT = 0.25 means 25% gamma, 75% QL weights (25% each: Γ_e, Q_e, Q_ions)
+const GAMMA_WEIGHT = 0.95
+const QL_WEIGHT = 1.0 - GAMMA_WEIGHT
+const QL_COMPONENT_WEIGHT = QL_WEIGHT / 3.0  # Divided among 3 QL components
+# ============================================================================
+
 using Distributed
 
 # Add worker processes
 if nprocs() == 1
-    n_workers = 77
+    n_workers = 120
     println("Adding $n_workers worker processes...")
     addprocs(n_workers,
              exeflags="--project=/global/homes/t/trifolio/.julia/dev/TurbulentTransport",
@@ -40,6 +49,11 @@ if nworkers() > 0
         using Interpolations, Optim, BlackBoxOptim, Statistics, DelimitedFiles
     end
     println("Workers ready!\n")
+
+    # Share weight configuration with workers
+    @eval @everywhere const GAMMA_WEIGHT = $GAMMA_WEIGHT
+    @eval @everywhere const QL_WEIGHT = $QL_WEIGHT
+    @eval @everywhere const QL_COMPONENT_WEIGHT = $QL_COMPONENT_WEIGHT
 end
 
 # Load data
@@ -225,7 +239,7 @@ end
     lambda::Float64=0.01;
     _version::Int=7
 )
-    """Optimize WIDTH: 50% gamma + 50% QL weights, loss = (asinh(TJLF) - asinh(CGYRO))^2"""
+    """Optimize WIDTH using configurable gamma/QL weight split, loss = (asinh(TJLF) - asinh(CGYRO))^2"""
 
     n_ky_total = length(ky_grid)
     best_width = Ref(baseline_width)
@@ -256,9 +270,9 @@ end
             q_electron_error = asinh(q_electron_ky) - asinh(cgyro_q_electron_target)
             q_ions_error = asinh(q_ions_ky) - asinh(cgyro_q_ions_target)
 
-            # 4-component loss:
-            component_loss = 0.75 * gamma_error^2 +
-                           (0.25/3.0) * (gamma_electron_error^2 + q_electron_error^2 + q_ions_error^2)
+            # 4-component loss using configurable weights:
+            component_loss = GAMMA_WEIGHT * gamma_error^2 +
+                           QL_COMPONENT_WEIGHT * (gamma_electron_error^2 + q_electron_error^2 + q_ions_error^2)
 
             regularization = lambda * ((width_value - baseline_width) / baseline_width)^2
             total_error = component_loss + regularization
@@ -457,8 +471,8 @@ end
         q_ions_baseline = sum(QL_weights_baseline[:, 2:3, 1, idx, 2])
         q_ions_error = asinh(q_ions_baseline) - asinh(cgyro_q_ions_interp[i])
 
-        baseline_loss += 0.75 * gamma_error^2 +
-                        (0.25/3.0) * (gamma_electron_error^2 + q_electron_error^2 + q_ions_error^2)
+        baseline_loss += GAMMA_WEIGHT * gamma_error^2 +
+                        QL_COMPONENT_WEIGHT * (gamma_electron_error^2 + q_electron_error^2 + q_ions_error^2)
     end
     baseline_mse = baseline_loss / n_ky_opt
 
@@ -697,6 +711,113 @@ function plot_frequency_comparison(shot::Int, width_spectrum_optimal, ky_grid_in
     return plt
 end
 
+function plot_ql_weights_comparison(shot::Int, width_spectrum_optimal, ky_grid_in, input_tjlf)
+    """Plot QL weights comparison: CGYRO vs baseline vs optimized TJLF for all 3 components"""
+
+    # Get CGYRO flux data
+    ky_cgyro = Float64.(data["cgyro_growthrate_spectra"][shot][1])
+    cgyro_fluxes = data["cgyro_ql_fluxes"][shot]
+    n_ky_cgyro = length(ky_cgyro)
+
+    # Extract CGYRO QL weights
+    cgyro_gamma_electron = zeros(Float64, n_ky_cgyro)
+    cgyro_q_electron = zeros(Float64, n_ky_cgyro)
+    cgyro_q_ions = zeros(Float64, n_ky_cgyro)
+
+    for ky_idx in 1:n_ky_cgyro
+        cgyro_gamma_electron[ky_idx] = sum(cgyro_fluxes[ky_idx][3][field+1][1] for field in 0:2)
+        cgyro_q_electron[ky_idx] = sum(cgyro_fluxes[ky_idx][3][field+1][2] for field in 0:2)
+        cgyro_q_ions[ky_idx] = sum(cgyro_fluxes[ky_idx][species+1][field+1][2]
+                                   for species in 0:1, field in 0:2)
+    end
+
+    # Run TJLF baseline and optimized
+    ky_grid = input_tjlf.KY_SPECTRUM
+    baseline_width_spectrum = fill(input_tjlf.WIDTH, length(ky_grid))
+    _, _, QL_weights_baseline = run_tjlf_with_width_spectrum(input_tjlf, baseline_width_spectrum)
+    _, _, QL_weights_optimized = run_tjlf_with_width_spectrum(input_tjlf, width_spectrum_optimal)
+
+    # Extract TJLF QL weights
+    gamma_electron_baseline = [sum(QL_weights_baseline[:, 1, 1, ky_idx, 1]) for ky_idx in 1:length(ky_grid)]
+    q_electron_baseline = [sum(QL_weights_baseline[:, 1, 1, ky_idx, 2]) for ky_idx in 1:length(ky_grid)]
+    q_ions_baseline = [sum(QL_weights_baseline[:, 2:3, 1, ky_idx, 2]) for ky_idx in 1:length(ky_grid)]
+
+    gamma_electron_optimized = [sum(QL_weights_optimized[:, 1, 1, ky_idx, 1]) for ky_idx in 1:length(ky_grid)]
+    q_electron_optimized = [sum(QL_weights_optimized[:, 1, 1, ky_idx, 2]) for ky_idx in 1:length(ky_grid)]
+    q_ions_optimized = [sum(QL_weights_optimized[:, 2:3, 1, ky_idx, 2]) for ky_idx in 1:length(ky_grid)]
+
+    # Create 3-panel plot
+    p1 = plot(
+        ky_cgyro, cgyro_gamma_electron,
+        label = "CGYRO",
+        marker = :circle,
+        lw = 2,
+        legend = :topright,
+        fontfamily = "Computer Modern",
+        xscale = :log10,
+        yscale = :log10,
+        ylims = (1e-4, Inf),
+        xlabel = L"k_y",
+        ylabel = L"\Gamma_{e}",
+        title = "Electron Particle QL Weight",
+        size = (800, 400)
+    )
+    plot!(p1, ky_grid, gamma_electron_baseline, label = "TJLF baseline", linestyle = :dash, alpha = 0.7, lw = 2)
+    plot!(p1, ky_grid, gamma_electron_optimized, label = "TJLF optimized", marker = :diamond, lw = 2, color = :red)
+    if !isempty(ky_grid_in)
+        vline!(p1, [minimum(ky_grid_in)], linestyle = :dot, color = :gray, alpha = 0.5, label = "")
+        vline!(p1, [maximum(ky_grid_in)], linestyle = :dot, color = :gray, alpha = 0.5, label = "")
+    end
+
+    p2 = plot(
+        ky_cgyro, cgyro_q_electron,
+        label = "CGYRO",
+        marker = :circle,
+        lw = 2,
+        legend = :topright,
+        fontfamily = "Computer Modern",
+        xscale = :log10,
+        yscale = :log10,
+        ylims = (1e-4, Inf),
+        xlabel = L"k_y",
+        ylabel = L"Q_{e}",
+        title = "Electron Heat QL Weight",
+        size = (800, 400)
+    )
+    plot!(p2, ky_grid, q_electron_baseline, label = "TJLF baseline", linestyle = :dash, alpha = 0.7, lw = 2)
+    plot!(p2, ky_grid, q_electron_optimized, label = "TJLF optimized", marker = :diamond, lw = 2, color = :red)
+    if !isempty(ky_grid_in)
+        vline!(p2, [minimum(ky_grid_in)], linestyle = :dot, color = :gray, alpha = 0.5, label = "")
+        vline!(p2, [maximum(ky_grid_in)], linestyle = :dot, color = :gray, alpha = 0.5, label = "")
+    end
+
+    p3 = plot(
+        ky_cgyro, cgyro_q_ions,
+        label = "CGYRO",
+        marker = :circle,
+        lw = 2,
+        legend = :topright,
+        fontfamily = "Computer Modern",
+        xscale = :log10,
+        yscale = :log10,
+        ylims = (1e-4, Inf),
+        xlabel = L"k_y",
+        ylabel = L"Q_{ions}",
+        title = "Ion Heat QL Weight",
+        size = (800, 400)
+    )
+    plot!(p3, ky_grid, q_ions_baseline, label = "TJLF baseline", linestyle = :dash, alpha = 0.7, lw = 2)
+    plot!(p3, ky_grid, q_ions_optimized, label = "TJLF optimized", marker = :diamond, lw = 2, color = :red)
+    if !isempty(ky_grid_in)
+        vline!(p3, [minimum(ky_grid_in)], linestyle = :dot, color = :gray, alpha = 0.5, label = "")
+        vline!(p3, [maximum(ky_grid_in)], linestyle = :dot, color = :gray, alpha = 0.5, label = "")
+    end
+
+    # Combine into single figure
+    plt = plot(p1, p2, p3, layout = (3, 1), size = (800, 1200))
+    return plt
+end
+
 function main_parallel(
     shots::Vector{Int};
     ky_filter_mode::String="less_than",
@@ -706,10 +827,14 @@ function main_parallel(
 )
     """Run 4-component QL weights optimization for multiple shots in parallel"""
 
+    gamma_pct = round(GAMMA_WEIGHT * 100, digits=1)
+    ql_pct = round(QL_WEIGHT * 100, digits=1)
+    ql_component_pct = round(QL_COMPONENT_WEIGHT * 100, digits=2)
+
     println("=" ^ 80)
     println("PARALLEL WIDTH_SPECTRUM OPTIMIZATION (4-COMPONENT QL WEIGHTS)")
     println("Workers: $(nworkers()) | Shots: $shots")
-    println("Cost: 75% gamma + 25% QL weights (8.33% each: Γ_e, Q_e, Q_ions)")
+    println("Cost: $(gamma_pct)% gamma + $(ql_pct)% QL weights ($(ql_component_pct)% each: Γ_e, Q_e, Q_ions)")
     println("=" ^ 80)
 
     optimize_func = shot -> optimize_width_spectrum_per_ky(shot;
@@ -763,6 +888,11 @@ function main_parallel(
         freq_filename = joinpath(shot_figs_dir, "shot_$(shot)_frequency.png")
         savefig(plt_freq, freq_filename)
         println("  Saved: $freq_filename")
+
+        plt_ql = plot_ql_weights_comparison(shot, width_spectrum_optimal, ky_grid_in, input_tjlf)
+        ql_filename = joinpath(shot_figs_dir, "shot_$(shot)_ql_weights.png")
+        savefig(plt_ql, ql_filename)
+        println("  Saved: $ql_filename")
     end
 
     println("\n" * "=" ^ 80)
@@ -772,18 +902,23 @@ function main_parallel(
     return results_dict
 end
 
+gamma_pct = round(GAMMA_WEIGHT * 100, digits=1)
+ql_pct = round(QL_WEIGHT * 100, digits=1)
+ql_component_pct = round(QL_COMPONENT_WEIGHT * 100, digits=2)
+
 println("Functions loaded successfully!")
 println("Workers: $(nworkers()) | Version: 2024-10-31-v3-asinh-direct")
-println("Cost: 50% gamma + 50% QL weights | asinh: (asinh(TJLF) - asinh(CGYRO))^2")
+println("Cost: $(gamma_pct)% gamma + $(ql_pct)% QL weights ($(ql_component_pct)% each: Γ_e, Q_e, Q_ions)")
 println("=" ^ 60)
 
 # ============================================================================
 # EXECUTION
 # ============================================================================
 
-shots_to_optimize = [8,10,11,12]  # Test with single shot
-# shots_to_optimize = collect(1:20)  # All shots
+# shots_to_optimize = [8,10,11,12]  # Test with single shot
+shots_to_optimize = collect(1:20)  # All shots
 # shots_to_optimize = [1,8,10,11,12]  # Specific shots
+# shots_to_optimize = vcat(1:7,9,13:20)
 
 width_spectrum_results = main_parallel(shots_to_optimize,
     ky_filter_mode="full",
