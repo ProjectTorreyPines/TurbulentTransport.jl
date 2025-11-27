@@ -281,6 +281,10 @@ function run_tglfnn(input_tglf::InputTGLF{T}; model_filename::String, uncertain:
     end
     sol = tglfmod(inputs...; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
     if fidelity == :GKNN
+        supported_gknn_models = ["sat3_em_d3d_azf-1", "sat3_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d_azf-1_withnegD", "sat3_em_d3d_azf-1_gkdb", "sat2_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d+mastu_azf-1"]
+        if !(model_filename in supported_gknn_models)
+            error("GKNN fidelity is not supported for model '$model_filename'. Supported models are: $(join(supported_gknn_models, ", "))")
+        end
         base_fluxes = [sol.ENERGY_FLUX_e, sol.ENERGY_FLUX_i, sol.PARTICLE_FLUX_e, sol.STRESS_TOR_i]
         if model_filename in ["sat3_em_d3d_azf-1"]
             gknne = loadmodelonce(model_filename * "_gknne24")
@@ -319,6 +323,16 @@ function run_tglfnn(input_tglf::InputTGLF{T}; model_filename::String, uncertain:
                     sol.STRESS_TOR_i * gkdb_err[2]
                 )
             end
+        elseif model_filename in ["sat3_em_d3d+mastu_azf-1"]
+            gknn = loadmodelonce(model_filename * "_gknn36")
+            err = flux_array(gknn, vcat(inputs, [base_fluxes[3], base_fluxes[4], base_fluxes[1], base_fluxes[2]]); uncertain, warn_nn_train_bounds, fidelity)
+            sol = GACODE.FluxSolution{T}(
+                sol.ENERGY_FLUX_e * err[3],
+                sol.ENERGY_FLUX_i * err[4],
+                sol.PARTICLE_FLUX_e * err[1],
+                Float64[],                   # PARTICLE_FLUX_i (empty for this model)
+                sol.STRESS_TOR_i * err[2]
+            )
         end
     end
     return sol
@@ -369,6 +383,10 @@ function run_tglfnn(input_tglfs::Vector{InputTGLF{T}}; model_filename::String, u
     end
     tmp = flux_array(tglfmod, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
     if fidelity == :GKNN
+        supported_gknn_models = ["sat3_em_d3d_azf-1", "sat3_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d_azf-1_withnegD", "sat3_em_d3d_azf-1_gkdb", "sat2_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d+mastu_azf-1"]
+        if !(model_filename in supported_gknn_models)
+            error("GKNN fidelity is not supported for model '$model_filename'. Supported models are: $(join(supported_gknn_models, ", "))")
+        end
         if model_filename in ["sat3_em_d3d_azf-1"]
             gknng = loadmodelonce(model_filename * "_gknng24")
             err_g = flux_array(gknng, vcat(inputs, reshape(tmp[1, :], 1, :)); uncertain, warn_nn_train_bounds, fidelity)
@@ -391,6 +409,10 @@ function run_tglfnn(input_tglfs::Vector{InputTGLF{T}}; model_filename::String, u
                 gkdb_err = flux_array(gkdb, vcat(inputs, tmp); uncertain, warn_nn_train_bounds, fidelity)
                 tmp .*= gkdb_err
             end
+        elseif model_filename in ["sat3_em_d3d+mastu_azf-1"]
+            gknn = loadmodelonce(model_filename * "_gknn36")
+            err = flux_array(gknn, vcat(inputs, tmp); uncertain, warn_nn_train_bounds, fidelity)
+            tmp .*= err
         end
     end
     sol = [flux_solution(tmp[:, i]...) for i in eachindex(input_tglfs)]
@@ -421,6 +443,10 @@ function run_tglfnn(data::Dict; model_filename::String, uncertain::Bool=false, w
     x = collect(transpose(reduce(hcat, [Float64.(data[name]) for name in xnames])))
     y = tglfmod(x; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
     if fidelity == :GKNN
+        supported_gknn_models = ["sat3_em_d3d_azf-1", "sat3_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d_azf-1_withnegD", "sat3_em_d3d_azf-1_gkdb", "sat2_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d+mastu_azf-1"]
+        if !(model_filename in supported_gknn_models)
+            error("GKNN fidelity is not supported for model '$model_filename'. Supported models are: $(join(supported_gknn_models, ", "))")
+        end
         if model_filename in ["sat3_em_d3d_azf-1"]
             gknng = loadmodelonce(model_filename * "_gknng24")
             err_g = gknng(vcat(x, y[1])...; uncertain, warn_nn_train_bounds, fidelity)
@@ -443,6 +469,10 @@ function run_tglfnn(data::Dict; model_filename::String, uncertain::Bool=false, w
                 gkdb_err = gkdb(vcat(x, y)...; uncertain, warn_nn_train_bounds, fidelity)
                 y .*= gkdb_err
             end
+        elseif model_filename in ["sat3_em_d3d+mastu_azf-1"]
+            gknn = loadmodelonce(model_filename * "_gknn36")
+            err = gknn(vcat(x, y)...; uncertain, warn_nn_train_bounds, fidelity)
+            y .*= err
         end
     end
     ynames = [replace(name, "OUT_" => "") for name in tglfmod.ynames]
