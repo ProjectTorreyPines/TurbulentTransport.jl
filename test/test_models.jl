@@ -83,5 +83,57 @@ import Flux
     @testset "loadmodel error for nonexistent model" begin
         @test_throws ErrorException loadmodel("nonexistent_model_xyz")
     end
+
+    @testset "TGLFNNmodel show method" begin
+        ensemble = loadmodel("sat0_em_d3d")
+        model = ensemble.models[1]
+
+        # Capture show output
+        io = IOBuffer()
+        show(io, MIME"text/plain"(), model)
+        output = String(take!(io))
+
+        # Verify key components are displayed
+        @test contains(output, "TGLFNNmodel")
+        @test contains(output, "date:")
+        @test contains(output, "nions:")
+        @test contains(output, "xnames")
+        @test contains(output, "ynames")
+        @test contains(output, string(length(model.xnames)))
+        @test contains(output, string(length(model.ynames)))
+    end
+
+    @testset "TGLFNNensemble show method" begin
+        ensemble = loadmodel(TEST_MODEL_ENSEMBLE)
+
+        # Capture show output
+        io = IOBuffer()
+        show(io, MIME"text/plain"(), ensemble)
+        output = String(take!(io))
+
+        # Verify ensemble header
+        @test contains(output, "TGLFNNensemble")
+        @test contains(output, "n models:")
+        @test contains(output, string(length(ensemble.models)))
+
+        # Verify first model info is also shown
+        @test contains(output, "TGLFNNmodel")
+        @test contains(output, "xnames")
+        @test contains(output, "ynames")
+    end
+
+    @testset "display works without error" begin
+        ensemble = loadmodel("sat0_em_d3d")
+        model = ensemble.models[1]
+
+        # display() via show to IOBuffer should not throw
+        io = IOBuffer()
+        @test (show(io, MIME"text/plain"(), ensemble); true)
+        @test (show(io, MIME"text/plain"(), model); true)
+
+        # repr should also work
+        @test !isempty(repr(MIME"text/plain"(), ensemble))
+        @test !isempty(repr(MIME"text/plain"(), model))
+    end
 end
 
