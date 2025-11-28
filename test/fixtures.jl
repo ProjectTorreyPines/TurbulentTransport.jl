@@ -7,6 +7,7 @@ const SAMPLE_INPUT_PATH = joinpath(TEST_DATA_DIR, "sample_input.tglf")
 # Known good model filenames for testing
 const TEST_MODEL_SINGLE = "sat3_em_d3d_azf-1"
 const TEST_MODEL_ENSEMBLE = "sat3_em_d3d_azf-1"  # This is an ensemble model
+const TEST_MODEL_GKNN = "sat3_em_d3d_azf-1_gknne24"  # GKNN correction model
 
 # Expected field values after loading sample_input.tglf
 const EXPECTED_LOAD_VALUES = (
@@ -79,8 +80,14 @@ end
 # flux_array expected outputs for sat0_em_d3d single model (first model in ensemble)
 const EXPECTED_FLUX_ARRAY_SINGLE = [0.021994637644215054, 0.14526707591951704, 0.4718316916684522, 0.4132556522695987]
 
-# flux_array expected outputs for sat0_em_d3d single model with GKNN fidelity (raw NN output, no denormalization)
-const EXPECTED_FLUX_ARRAY_SINGLE_GKNN = [-0.23004951851133254, -0.21326135534711577, -0.31156058557178723, -0.32071940967901724]
+# flux_array expected outputs for sat0_em_d3d single model with fidelity=:GKNN
+# Note: This is a TGLF-NN model, so fidelity=:GKNN just skips denormalization (raw NN output)
+const EXPECTED_FLUX_ARRAY_SINGLE_RAW = [-0.23004951851133254, -0.21326135534711577, -0.31156058557178723, -0.32071940967901724]
+
+# GKNN correction model (sat3_em_d3d_azf-1_gknne24) expected outputs
+# These models have ynames of length 2, and fidelity=:GKNN outputs div(ynames, 2) = 1 value
+const EXPECTED_GKNN_MODEL_SINGLE = [0.93651175002966]
+const EXPECTED_GKNN_MODEL_ENSEMBLE = [0.9496942106346887]
 
 # flux_array expected outputs for sat3_em_d3d_azf-1 ensemble
 const EXPECTED_FLUX_ARRAY_ENSEMBLE = [-0.019443083518266357, 0.04080973584865324, 0.23715745308655625, 0.07256906359102389]
