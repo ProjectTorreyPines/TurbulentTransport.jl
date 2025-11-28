@@ -150,12 +150,79 @@ end
 #= ==================================== =#
 #  functions to get the fluxes solution
 #= ==================================== =#
+"""
+    flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; ...) where {T}
+
+Batched inference: processes entire `[N_features, M_samples]` matrix in single forward pass.
+"""
 function flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T}
-    N, _ = size(x)
-    xx = Vector{T}(undef, N)
-    return hcat(collect(map(x0 -> flux_array(fluxmodel, x0; warn_nn_train_bounds, fidelity, xx), eachslice(x; dims=2)))...)
+    N, M = size(x)  # N = input features, M = samples
+    
+    # Allocate working matrix
+    xx = similar(x)
+
+    # Apply log10 transform where needed (name-based check)
+    @inbounds for i in 1:N
+        if contains(fluxmodel.xnames[i], log_suffix)
+            for j in 1:M
+                xx[i, j] = log10(x[i, j])
+            end
+        else
+            for j in 1:M
+                xx[i, j] = x[i, j]
+            end
+        end
+    end
+
+    # Bounds checking (only on first column to avoid spam, same as original)
+    if warn_nn_train_bounds
+        for ix in 1:N
+            # Check first column as representative
+            val = xx[ix, 1]
+            if isnan(val) || isinf(val)
+                error("$(fluxmodel.xnames[ix]) = $(x[ix, 1]) is not allowed")
+            elseif val < fluxmodel.xbounds[ix, 1]
+                @warn("Extrapolation $(fluxmodel.xnames[ix])=$(val) is below training bound of $(fluxmodel.xbounds[ix,:])")
+            elseif val > fluxmodel.xbounds[ix, 2]
+                @warn("Extrapolation $(fluxmodel.xnames[ix])=$(val) is above training bound of $(fluxmodel.xbounds[ix,:])")
+            end
+        end
+    end
+
+    # Normalize: (xx - mean) / std, broadcasting over columns
+    # fluxmodel.xm and fluxmodel.xσ are Vector{Float64} of length N
+    @inbounds for i in 1:N
+        xm_i = fluxmodel.xm[i]
+        xσ_i = fluxmodel.xσ[i]
+        for j in 1:M
+            xx[i, j] = (xx[i, j] - xm_i) / xσ_i
+        end
+    end
+
+    # Single forward pass through the entire batch!
+    yy = fluxmodel.fluxmodel(xx)
+
+    if fidelity == :GKNN
+        return yy
+    elseif fidelity == :TGLFNN
+        # Denormalize output: yy * yσ + ym
+        nouts = size(yy, 1)
+        @inbounds for i in 1:nouts
+            ym_i = fluxmodel.ym[i]
+            yσ_i = fluxmodel.yσ[i]
+            for j in 1:M
+                yy[i, j] = yy[i, j] * yσ_i + ym_i
+            end
+        end
+        return yy
+    end
 end
 
+"""
+    flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; ...) where {T}
+
+Single-sample inference: processes one input vector through the model.
+"""
 function flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN, xx::Vector{T}=similar(x)) where {T}
     for (ix, name) in enumerate(fluxmodel.xnames)
         xx[ix] = contains(name, "_log10") ? log10(x[ix]) : x[ix]
@@ -181,6 +248,11 @@ function flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; warn_nn_train_
     end
 end
 
+"""
+    flux_array(fluxensemble::TGLFNNensemble, x::AbstractArray{T}; ...) where {T<:Real}
+
+Ensemble batched inference: runs all models in parallel, returns mean (± std if `uncertain=true`).
+"""
 function flux_array(fluxensemble::TGLFNNensemble, x::AbstractArray{T}; uncertain::Bool=false, warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
     nmodels = length(fluxensemble.models)
     nouts = length(fluxensemble.models[1].ynames)
@@ -206,6 +278,11 @@ function flux_array(fluxensemble::TGLFNNensemble, x::AbstractArray{T}; uncertain
     end
 end
 
+"""
+    flux_array(fluxensemble::TGLFNNensemble, x::AbstractVector{T}; ...) where {T<:Real}
+
+Ensemble single-sample inference: runs all models on one vector, returns mean (± std if `uncertain=true`).
+"""
 function flux_array(fluxensemble::TGLFNNensemble, x::AbstractVector{T}; uncertain::Bool=false, warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
     nmodels = length(fluxensemble.models)
     nouts = length(fluxensemble.models[1].ynames)
@@ -230,6 +307,11 @@ function flux_array(fluxensemble::TGLFNNensemble, x::AbstractVector{T}; uncertai
     end
 end
 
+"""
+    flux_array(fluxmodel::TGLFmodel, args...; ...)
+
+Vararg convenience: reshapes scalar arguments into matrix and delegates to batched method.
+"""
 function flux_array(fluxmodel::TGLFmodel, args...; uncertain::Bool=false, warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN)
     args = reshape([k for k in args], (length(args), 1))
     return flux_array(fluxmodel, args; uncertain, warn_nn_train_bounds, fidelity)
@@ -280,9 +362,11 @@ function run_tglfnn(input_tglf::InputTGLF{T}; model_filename::String, uncertain:
         inputs[k] = getfield(input_tglf, Symbol(item))
     end
     sol = tglfmod(inputs...; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
+    # Main.@infiltrate
     if fidelity == :GKNN
         base_fluxes = [sol.ENERGY_FLUX_e, sol.ENERGY_FLUX_i, sol.PARTICLE_FLUX_e, sol.STRESS_TOR_i]
         if model_filename in ["sat3_em_d3d_azf-1"]
+            # Main.@infiltrate
             gknne = loadmodelonce(model_filename * "_gknne24")
             err_e = flux_array(gknne, vcat(inputs, base_fluxes[1]); uncertain, warn_nn_train_bounds, fidelity)
             gknni = loadmodelonce(model_filename * "_gknni24")
