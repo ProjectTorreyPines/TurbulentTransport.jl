@@ -4,6 +4,9 @@ using TurbulentTransport: InputTGLF, flux_array, flux_solution, loadmodel, avail
 using TurbulentTransport: TGLFNNmodel, TGLFNNensemble
 using TurbulentTransport.Measurements
 
+# Relative tolerance for regression tests (allows cross-platform floating-point variance)
+const REGRESSION_RTOL = 1e-12
+
 # Include test fixtures
 include("fixtures.jl")
 

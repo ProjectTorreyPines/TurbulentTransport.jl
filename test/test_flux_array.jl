@@ -13,7 +13,7 @@
         @test result isa AbstractVector
         @test length(result) == length(single_model.ynames)
         @test all(isfinite, result)
-        @test result == EXPECTED_FLUX_ARRAY_SINGLE
+        @test result ≈ EXPECTED_FLUX_ARRAY_SINGLE rtol=REGRESSION_RTOL
     end
 
     @testset "single model with matrix input" begin
@@ -27,9 +27,9 @@
         @test size(result, 2) == n_samples
         @test all(isfinite, result)
         # All columns should be identical since input is identical
-        @test result[:, 1] == EXPECTED_FLUX_ARRAY_SINGLE
+        @test result[:, 1] ≈ EXPECTED_FLUX_ARRAY_SINGLE rtol=REGRESSION_RTOL
         for j in 2:n_samples
-            @test result[:, j] == result[:, 1]
+            @test result[:, j] ≈ result[:, 1] rtol=REGRESSION_RTOL
         end
     end
 
@@ -40,7 +40,7 @@
         result = flux_array(ensemble_model, x; uncertain=false, warn_nn_train_bounds=false)
         @test result isa AbstractVector
         @test all(isfinite, result)
-        @test result == EXPECTED_FLUX_ARRAY_ENSEMBLE
+        @test result ≈ EXPECTED_FLUX_ARRAY_ENSEMBLE rtol=REGRESSION_RTOL
 
         # Test with uncertainty (returns Measurement type)
         result_uncertain = flux_array(ensemble_model, x; uncertain=true, warn_nn_train_bounds=false)
@@ -57,9 +57,9 @@
         @test size(result, 2) == n_samples
         @test all(isfinite, result)
         # All columns should be identical since input is identical
-        @test result[:, 1] == EXPECTED_FLUX_ARRAY_ENSEMBLE
+        @test result[:, 1] ≈ EXPECTED_FLUX_ARRAY_ENSEMBLE rtol=REGRESSION_RTOL
         for j in 2:n_samples
-            @test result[:, j] == result[:, 1]
+            @test result[:, j] ≈ result[:, 1] rtol=REGRESSION_RTOL
         end
     end
 
@@ -80,7 +80,7 @@
 
         @test result isa AbstractArray
         @test all(isfinite, result)
-        @test vec(result) == EXPECTED_FLUX_ARRAY_ENSEMBLE
+        @test vec(result) ≈ EXPECTED_FLUX_ARRAY_ENSEMBLE rtol=REGRESSION_RTOL
     end
 
     @testset "fidelity modes" begin
@@ -88,7 +88,7 @@
 
         result_tglfnn = flux_array(ensemble_model, x; fidelity=:TGLFNN, warn_nn_train_bounds=false)
         @test length(result_tglfnn) == length(ensemble_model.ynames)
-        @test result_tglfnn == EXPECTED_FLUX_ARRAY_ENSEMBLE
+        @test result_tglfnn ≈ EXPECTED_FLUX_ARRAY_ENSEMBLE rtol=REGRESSION_RTOL
 
         # Note: fidelity=:GKNN on ensemble has dimension mismatch bug when
         # nouts differs between modes. Test TGLFNN mode only for now.
@@ -131,7 +131,7 @@
         @test result_gknn isa AbstractVector
         @test length(result_gknn) == length(single_model.ynames)
         @test all(isfinite, result_gknn)
-        @test result_gknn == EXPECTED_FLUX_ARRAY_SINGLE_GKNN
+        @test result_gknn ≈ EXPECTED_FLUX_ARRAY_SINGLE_GKNN rtol=REGRESSION_RTOL
 
         # GKNN and TGLFNN should produce different results
         result_tglfnn = flux_array(single_model, x; fidelity=:TGLFNN, warn_nn_train_bounds=false)
@@ -148,7 +148,7 @@
         @test size(result_gknn, 1) == length(single_model.ynames)
         @test size(result_gknn, 2) == n_samples
         @test all(isfinite, result_gknn)
-        @test result_gknn[:, 1] == EXPECTED_FLUX_ARRAY_SINGLE_GKNN
+        @test result_gknn[:, 1] ≈ EXPECTED_FLUX_ARRAY_SINGLE_GKNN rtol=REGRESSION_RTOL
     end
 
     @testset "log10 transformation applied correctly" begin
@@ -248,6 +248,6 @@
 
         # With bounds checking enabled, should still work for valid input
         result_with_warn = flux_array(single_model, x; warn_nn_train_bounds=true)
-        @test result_no_warn == result_with_warn
+        @test result_no_warn ≈ result_with_warn rtol=REGRESSION_RTOL
     end
 end

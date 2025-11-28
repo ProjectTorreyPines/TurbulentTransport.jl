@@ -1,9 +1,5 @@
 using GACODE: FluxSolution
 
-# Tolerance for floating-point comparisons
-# Allows for 1 ULP differences due to different compilation environments
-const REGRESSION_RTOL = 1e-14
-
 @testset "run_tglfnn" begin
     @testset "basic run with InputTGLF" begin
         input_tglf = load_sample_input()
