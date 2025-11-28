@@ -1,5 +1,9 @@
 using GACODE: FluxSolution
 
+# Tolerance for floating-point comparisons
+# Allows for 1 ULP differences due to different compilation environments
+const REGRESSION_RTOL = 1e-14
+
 @testset "run_tglfnn" begin
     @testset "basic run with InputTGLF" begin
         input_tglf = load_sample_input()
@@ -12,10 +16,10 @@ using GACODE: FluxSolution
         )
 
         @test result isa FluxSolution
-        @test isfinite(result.ENERGY_FLUX_e)
-        @test isfinite(result.ENERGY_FLUX_i)
-        @test isfinite(result.PARTICLE_FLUX_e)
-        @test isfinite(result.STRESS_TOR_i)
+        @test result.ENERGY_FLUX_e ≈ EXPECTED_RUN_TGLFNN_SAT3.ENERGY_FLUX_e rtol=REGRESSION_RTOL
+        @test result.ENERGY_FLUX_i ≈ EXPECTED_RUN_TGLFNN_SAT3.ENERGY_FLUX_i rtol=REGRESSION_RTOL
+        @test result.PARTICLE_FLUX_e ≈ EXPECTED_RUN_TGLFNN_SAT3.PARTICLE_FLUX_e rtol=REGRESSION_RTOL
+        @test result.STRESS_TOR_i ≈ EXPECTED_RUN_TGLFNN_SAT3.STRESS_TOR_i rtol=REGRESSION_RTOL
     end
 
     @testset "run with fidelity=:GKNN" begin
@@ -40,8 +44,17 @@ using GACODE: FluxSolution
         @test result_tglfnn isa FluxSolution
         @test result_gknn isa FluxSolution
 
-        # GKNN applies correction factors, so results should differ
-        @test result_tglfnn.ENERGY_FLUX_e != result_gknn.ENERGY_FLUX_e
+        # TGLFNN should match expected values
+        @test result_tglfnn.ENERGY_FLUX_e ≈ EXPECTED_RUN_TGLFNN_SAT3.ENERGY_FLUX_e rtol=REGRESSION_RTOL
+        @test result_tglfnn.ENERGY_FLUX_i ≈ EXPECTED_RUN_TGLFNN_SAT3.ENERGY_FLUX_i rtol=REGRESSION_RTOL
+        @test result_tglfnn.PARTICLE_FLUX_e ≈ EXPECTED_RUN_TGLFNN_SAT3.PARTICLE_FLUX_e rtol=REGRESSION_RTOL
+        @test result_tglfnn.STRESS_TOR_i ≈ EXPECTED_RUN_TGLFNN_SAT3.STRESS_TOR_i rtol=REGRESSION_RTOL
+
+        # GKNN applies correction factors, should match GKNN expected values
+        @test result_gknn.ENERGY_FLUX_e ≈ EXPECTED_RUN_TGLFNN_SAT3_GKNN.ENERGY_FLUX_e rtol=REGRESSION_RTOL
+        @test result_gknn.ENERGY_FLUX_i ≈ EXPECTED_RUN_TGLFNN_SAT3_GKNN.ENERGY_FLUX_i rtol=REGRESSION_RTOL
+        @test result_gknn.PARTICLE_FLUX_e ≈ EXPECTED_RUN_TGLFNN_SAT3_GKNN.PARTICLE_FLUX_e rtol=REGRESSION_RTOL
+        @test result_gknn.STRESS_TOR_i ≈ EXPECTED_RUN_TGLFNN_SAT3_GKNN.STRESS_TOR_i rtol=REGRESSION_RTOL
     end
 
     @testset "run with uncertain=true" begin
@@ -132,16 +145,28 @@ using GACODE: FluxSolution
         input_tglf = load_sample_input()
         TurbulentTransport.apply_presets!(input_tglf)
 
-        # Test a few different model types
-        for model_name in ["sat3_em_d3d_azf-1", "sat2_em_d3d_azf-1"]
-            result = TurbulentTransport.run_tglfnn(
-                input_tglf;
-                model_filename=model_name,
-                warn_nn_train_bounds=false
-            )
-            @test result isa FluxSolution
-            @test all(isfinite, [result.ENERGY_FLUX_e, result.ENERGY_FLUX_i,
-                                 result.PARTICLE_FLUX_e, result.STRESS_TOR_i])
-        end
+        # Test sat3_em_d3d_azf-1
+        result_sat3 = TurbulentTransport.run_tglfnn(
+            input_tglf;
+            model_filename="sat3_em_d3d_azf-1",
+            warn_nn_train_bounds=false
+        )
+        @test result_sat3 isa FluxSolution
+        @test result_sat3.ENERGY_FLUX_e ≈ EXPECTED_RUN_TGLFNN_SAT3.ENERGY_FLUX_e rtol=REGRESSION_RTOL
+        @test result_sat3.ENERGY_FLUX_i ≈ EXPECTED_RUN_TGLFNN_SAT3.ENERGY_FLUX_i rtol=REGRESSION_RTOL
+        @test result_sat3.PARTICLE_FLUX_e ≈ EXPECTED_RUN_TGLFNN_SAT3.PARTICLE_FLUX_e rtol=REGRESSION_RTOL
+        @test result_sat3.STRESS_TOR_i ≈ EXPECTED_RUN_TGLFNN_SAT3.STRESS_TOR_i rtol=REGRESSION_RTOL
+
+        # Test sat2_em_d3d_azf-1
+        result_sat2 = TurbulentTransport.run_tglfnn(
+            input_tglf;
+            model_filename="sat2_em_d3d_azf-1",
+            warn_nn_train_bounds=false
+        )
+        @test result_sat2 isa FluxSolution
+        @test result_sat2.ENERGY_FLUX_e ≈ EXPECTED_RUN_TGLFNN_SAT2.ENERGY_FLUX_e rtol=REGRESSION_RTOL
+        @test result_sat2.ENERGY_FLUX_i ≈ EXPECTED_RUN_TGLFNN_SAT2.ENERGY_FLUX_i rtol=REGRESSION_RTOL
+        @test result_sat2.PARTICLE_FLUX_e ≈ EXPECTED_RUN_TGLFNN_SAT2.PARTICLE_FLUX_e rtol=REGRESSION_RTOL
+        @test result_sat2.STRESS_TOR_i ≈ EXPECTED_RUN_TGLFNN_SAT2.STRESS_TOR_i rtol=REGRESSION_RTOL
     end
 end

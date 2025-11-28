@@ -20,5 +20,6 @@ else
         include("test_flux_array.jl")
         include("test_run_tglfnn.jl")
         include("test_utils.jl")
+        include("test_input_tglfs.jl")
     end
 end
