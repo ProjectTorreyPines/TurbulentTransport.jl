@@ -79,6 +79,9 @@ end
 # flux_array expected outputs for sat0_em_d3d single model (first model in ensemble)
 const EXPECTED_FLUX_ARRAY_SINGLE = [0.021994637644215054, 0.14526707591951704, 0.4718316916684522, 0.4132556522695987]
 
+# flux_array expected outputs for sat0_em_d3d single model with GKNN fidelity (raw NN output, no denormalization)
+const EXPECTED_FLUX_ARRAY_SINGLE_GKNN = [-0.23004951851133254, -0.21326135534711577, -0.31156058557178723, -0.32071940967901724]
+
 # flux_array expected outputs for sat3_em_d3d_azf-1 ensemble
 const EXPECTED_FLUX_ARRAY_ENSEMBLE = [-0.019443083518266357, 0.04080973584865324, 0.23715745308655625, 0.07256906359102389]
 

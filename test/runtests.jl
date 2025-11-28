@@ -2,6 +2,7 @@ using Test
 using TurbulentTransport
 using TurbulentTransport: InputTGLF, flux_array, flux_solution, loadmodel, available_models
 using TurbulentTransport: TGLFNNmodel, TGLFNNensemble
+using TurbulentTransport.Measurements
 
 # Include test fixtures
 include("fixtures.jl")
