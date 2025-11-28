@@ -27,12 +27,11 @@ using GACODE
     end
 
     @testset "save and reload" begin
-        filepath, tmpdir = create_temp_input_tglf()
-        try
-            # Load original
-            input_tglf = TurbulentTransport.load(InputTGLF(), filepath)
+        input_tglf = load_sample_input()
 
-            # Save to new file
+        # Save to temp file
+        tmpdir = mktempdir()
+        try
             save_path = joinpath(tmpdir, "saved_input.tglf")
             TurbulentTransport.save(input_tglf, save_path)
 
@@ -45,7 +44,7 @@ using GACODE
             @test reloaded.BETAE ≈ input_tglf.BETAE
             @test reloaded.Q_LOC ≈ input_tglf.Q_LOC
         finally
-            cleanup_temp_dir(tmpdir)
+            rm(tmpdir; force=true, recursive=true)
         end
     end
 
@@ -77,21 +76,16 @@ using GACODE
     end
 
     @testset "compare_two_input_tglfs" begin
-        filepath, tmpdir = create_temp_input_tglf()
-        try
-            input1 = TurbulentTransport.load(InputTGLF(), filepath)
-            input2 = TurbulentTransport.load(InputTGLF(), filepath)
+        input1 = load_sample_input()
+        input2 = load_sample_input()
 
-            # Modify input2 slightly
-            input2.BETAE = input1.BETAE * 1.1
+        # Modify input2 slightly
+        input2.BETAE = input1.BETAE * 1.1
 
-            diff = TurbulentTransport.compare_two_input_tglfs(input1, input2)
+        diff = TurbulentTransport.compare_two_input_tglfs(input1, input2)
 
-            @test diff isa InputTGLF
-            # BETAE difference should be 10% of original
-            @test abs(diff.BETAE) ≈ abs(input1.BETAE * 0.1) rtol=0.01
-        finally
-            cleanup_temp_dir(tmpdir)
-        end
+        @test diff isa InputTGLF
+        # BETAE difference should be 10% of original
+        @test abs(diff.BETAE) ≈ abs(input1.BETAE * 0.1) rtol=0.01
     end
 end

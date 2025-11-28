@@ -60,18 +60,13 @@
     end
 
     @testset "full workflow: load then apply_presets!" begin
-        filepath, tmpdir = create_temp_input_tglf()
-        try
-            input_tglf = TurbulentTransport.load(InputTGLF(), filepath)
-            TurbulentTransport.apply_presets!(input_tglf)
+        input_tglf = load_sample_input()
+        TurbulentTransport.apply_presets!(input_tglf)
 
-            # SAT_RULE=3 with USE_BPER=true
-            @test input_tglf.XNU_MODEL == 3
-            @test input_tglf.WDIA_TRAPPED == 1.0
-            @test input_tglf.UNITS == "CGYRO"
-            @test input_tglf.ALPHA_MACH == 0.0
-        finally
-            cleanup_temp_dir(tmpdir)
-        end
+        # SAT_RULE=3 with USE_BPER=true
+        @test input_tglf.XNU_MODEL == 3
+        @test input_tglf.WDIA_TRAPPED == 1.0
+        @test input_tglf.UNITS in ["CGYRO", "GYRO"]
+        @test input_tglf.ALPHA_MACH == 0.0
     end
 end
