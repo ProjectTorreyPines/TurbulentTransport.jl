@@ -344,7 +344,7 @@ end
 Single-sample inference for non-Float64 input. Converts to Float64 and delegates to hot path.
 """
 function flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN, xx::Vector{T} = similar(x)) where {T<:Real}
-    flux_array(fluxmodel, Float64.(x); warn_nn_train_bounds, fidelity, Float64.(xx))
+    flux_array(fluxmodel, Float64.(x); warn_nn_train_bounds, fidelity, xx=Float64.(xx))
 end
 
 function flux_solution(fluxmodel::TGLFmodel, args...; uncertain::Bool=false, warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN)
