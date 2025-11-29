@@ -150,15 +150,18 @@ end
 #= ==================================== =#
 #  functions to get the fluxes solution
 #= ==================================== =#
-"""
-    flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; ...) where {T}
 
-Batched inference: processes entire `[N_features, M_samples]` matrix in single forward pass.
+# Hot path: Float64 specialized (no type promotion overhead)
 """
-function flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T}
+    flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{Float64}; ...)
+
+Batched inference (hot path): processes entire `[N_features, M_samples]` Float64 matrix in single forward pass.
+All operations are Float64 → no type promotion, no boxing.
+"""
+function flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{Float64}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN)
     N, M = size(x)  # N = input features, M = samples
-    
-    # Allocate working matrix
+
+    # Allocate working matrix (Float64)
     xx = similar(x)
 
     # Apply log10 transform where needed (name-based check)
@@ -174,23 +177,21 @@ function flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; warn_nn_train_
         end
     end
 
-    # Bounds checking (only on first column to avoid spam, same as original)
+    # Bounds checking (only on first column to avoid spam)
     if warn_nn_train_bounds
         for ix in 1:N
-            # Check first column as representative
             val = xx[ix, 1]
             if isnan(val) || isinf(val)
                 error("$(fluxmodel.xnames[ix]) = $(x[ix, 1]) is not allowed")
             elseif val < fluxmodel.xbounds[ix, 1]
-                @warn("Extrapolation $(fluxmodel.xnames[ix])=$(val) is below training bound of $(fluxmodel.xbounds[ix,:])")
+                @warn("Extrapolation $(fluxmodel.xnames[ix])=$(val) is below training bound of $(fluxmodel.xbounds[ix, 1])")
             elseif val > fluxmodel.xbounds[ix, 2]
-                @warn("Extrapolation $(fluxmodel.xnames[ix])=$(val) is above training bound of $(fluxmodel.xbounds[ix,:])")
+                @warn("Extrapolation $(fluxmodel.xnames[ix])=$(val) is above training bound of $(fluxmodel.xbounds[ix, 2])")
             end
         end
     end
 
-    # Normalize: (xx - mean) / std, broadcasting over columns
-    # fluxmodel.xm and fluxmodel.xσ are Vector{Float64} of length N
+    # Normalize: (xx - mean) / std
     @inbounds for i in 1:N
         xm_i = fluxmodel.xm[i]
         xσ_i = fluxmodel.xσ[i]
@@ -199,8 +200,8 @@ function flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; warn_nn_train_
         end
     end
 
-    # Single forward pass through the entire batch!
-    yy = fluxmodel.fluxmodel(xx)
+    # Single forward pass through the entire batch
+    yy = fluxmodel.fluxmodel(xx)::Matrix{Float64}
 
     if fidelity == :GKNN
         return yy
@@ -215,36 +216,46 @@ function flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; warn_nn_train_
             end
         end
         return yy
+    else
+        error("Unknown fidelity mode: $fidelity. Expected :GKNN or :TGLFNN")
     end
 end
 
+# Hot path: Float64 specialized
 """
-    flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; ...) where {T}
+    flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{Float64}; ...)
 
-Single-sample inference: processes one input vector through the model.
+Single-sample inference (hot path): processes one Float64 vector through the model.
 """
-function flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN, xx::Vector{T}=similar(x)) where {T}
+function flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{Float64}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN, xx::Vector{Float64} = similar(x) )
+    N = length(x)
+
     for (ix, name) in enumerate(fluxmodel.xnames)
         xx[ix] = contains(name, "_log10") ? log10(x[ix]) : x[ix]
     end
-    if warn_nn_train_bounds # training bounds are on the original data but after log10
-        for ix in eachindex(xx)
+
+    if warn_nn_train_bounds
+        for ix in 1:N
             if isnan(xx[ix]) || isinf(xx[ix])
                 error("$(fluxmodel.xnames[ix]) = $(x[ix]) is not allowed")
             elseif xx[ix] < fluxmodel.xbounds[ix, 1]
-                @warn("Extrapolation $(fluxmodel.xnames[ix])=$(minimum(xx[ix,:])) is below training bound of $(fluxmodel.xbounds[ix,:])")
+                @warn("Extrapolation $(fluxmodel.xnames[ix])=$(xx[ix]) is below training bound of $(fluxmodel.xbounds[ix, 1])")
             elseif xx[ix] > fluxmodel.xbounds[ix, 2]
-                @warn("Extrapolation $(fluxmodel.xnames[ix])=$(maximum(xx[ix,:])) is above training bound of $(fluxmodel.xbounds[ix,:])")
+                @warn("Extrapolation $(fluxmodel.xnames[ix])=$(xx[ix]) is above training bound of $(fluxmodel.xbounds[ix, 2])")
             end
         end
     end
+
     @. xx = (xx - fluxmodel.xm) / fluxmodel.xσ
-    yy = fluxmodel.fluxmodel(xx)
+    yy = fluxmodel.fluxmodel(xx)::Vector{Float64}
+
     if fidelity == :GKNN
         return yy
     elseif fidelity == :TGLFNN
         @. yy = yy * fluxmodel.yσ + fluxmodel.ym
         return yy
+    else
+        error("Unknown fidelity mode: $fidelity. Expected :GKNN or :TGLFNN")
     end
 end
 
@@ -315,6 +326,25 @@ Vararg convenience: reshapes scalar arguments into matrix and delegates to batch
 function flux_array(fluxmodel::TGLFmodel, args...; uncertain::Bool=false, warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN)
     args = reshape([k for k in args], (length(args), 1))
     return flux_array(fluxmodel, args; uncertain, warn_nn_train_bounds, fidelity)
+end
+
+# Generic fallbacks: convert non-Float64 inputs to Float64 and call hot path
+"""
+    flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; ...) where {T<:Real}
+
+Batched inference for non-Float64 input. Converts to Float64 and delegates to hot path.
+"""
+function flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
+    flux_array(fluxmodel, Float64.(x); warn_nn_train_bounds, fidelity)
+end
+
+"""
+    flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; ...) where {T<:Real}
+
+Single-sample inference for non-Float64 input. Converts to Float64 and delegates to hot path.
+"""
+function flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN, xx::Vector{T} = similar(x)) where {T<:Real}
+    flux_array(fluxmodel, Float64.(x); warn_nn_train_bounds, fidelity, Float64.(xx))
 end
 
 function flux_solution(fluxmodel::TGLFmodel, args...; uncertain::Bool=false, warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN)
