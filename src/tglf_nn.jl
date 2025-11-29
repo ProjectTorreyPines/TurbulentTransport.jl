@@ -151,17 +151,15 @@ end
 #  functions to get the fluxes solution
 #= ==================================== =#
 
-# Hot path: Float64 specialized (no type promotion overhead)
 """
-    flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{Float64}; ...)
+    flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; ...) where {T<:Real}
 
-Batched inference (hot path): processes entire `[N_features, M_samples]` Float64 matrix in single forward pass.
-All operations are Float64 → no type promotion, no boxing.
+Batched inference: processes entire `[N_features, M_samples]` matrix in single forward pass.
 """
-function flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{Float64}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN)
+function flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
     N, M = size(x)  # N = input features, M = samples
 
-    # Allocate working matrix (Float64)
+    # Allocate working matrix (same type as input)
     xx = similar(x)
 
     # Apply log10 transform where needed (name-based check)
@@ -221,13 +219,12 @@ function flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{Float64}; warn_nn_
     end
 end
 
-# Hot path: Float64 specialized
 """
-    flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{Float64}; ...)
+    flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; ...) where {T<:Real}
 
-Single-sample inference (hot path): processes one Float64 vector through the model.
+Single-sample inference: processes one vector through the model.
 """
-function flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{Float64}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN, xx::Vector{Float64} = similar(x) )
+function flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN, xx::AbstractVector{T}=similar(x)) where {T<:Real}
     N = length(x)
 
     for (ix, name) in enumerate(fluxmodel.xnames)
@@ -328,30 +325,10 @@ function flux_array(fluxmodel::TGLFmodel, args...; uncertain::Bool=false, warn_n
     return flux_array(fluxmodel, args; uncertain, warn_nn_train_bounds, fidelity)
 end
 
-# Generic fallbacks: convert non-Float64 inputs to Float64 and call hot path
-"""
-    flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; ...) where {T<:Real}
-
-Batched inference for non-Float64 input. Converts to Float64 and delegates to hot path.
-"""
-function flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
-    flux_array(fluxmodel, Float64.(x); warn_nn_train_bounds, fidelity)
-end
-
-"""
-    flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; ...) where {T<:Real}
-
-Single-sample inference for non-Float64 input. Converts to Float64 and delegates to hot path.
-"""
-function flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN, xx::Vector{T} = similar(x)) where {T<:Real}
-    flux_array(fluxmodel, Float64.(x); warn_nn_train_bounds, fidelity, xx=Float64.(xx))
-end
-
 function flux_solution(fluxmodel::TGLFmodel, args...; uncertain::Bool=false, warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN)
     return flux_solution(flux_array(fluxmodel, collect(args); uncertain, warn_nn_train_bounds, fidelity)...)
 end
 
-#= ======================= =#
 # functors for TGLFNNmodel
 #= ======================= =#
 function (fluxmodel::TGLFmodel)(x::AbstractArray; uncertain::Bool=false, warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN)
