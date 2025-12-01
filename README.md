@@ -1,3 +1,6 @@
+[![CI](https://github.com/ProjectTorreyPines/TurbulentTransport.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/ProjectTorreyPines/TurbulentTransport.jl/actions/workflows/CI.yml)
+[![codecov](https://codecov.io/github/ProjectTorreyPines/TurbulentTransport.jl/graph/badge.svg?token=6CdJLykYa9)](https://codecov.io/github/ProjectTorreyPines/TurbulentTransport.jl)
+
 # TurbulentTransport.jl
 
 Run TGLF-NN, GKNN, TGLF, and QLGYRO models. 
