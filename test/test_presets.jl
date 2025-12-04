@@ -66,7 +66,7 @@
         # SAT_RULE=3 with USE_BPER=true
         @test input_tglf.XNU_MODEL == 3
         @test input_tglf.WDIA_TRAPPED == 1.0
-        @test input_tglf.UNITS in ["CGYRO", "GYRO"]
+        @test input_tglf.UNITS in ("CGYRO", "GYRO")
         @test input_tglf.ALPHA_MACH == 0.0
     end
 end
