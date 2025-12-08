@@ -5,6 +5,7 @@ version = "1.0.14"
 
 
 [deps]
+AdaptiveArrayPools = "5768322a-0810-4546-8322-123456789abc"
 BSON = "fbb218c0-5317-5bc6-957e-2ee96dd4b1f0"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
@@ -19,7 +20,11 @@ ONNXRunTime = "e034b28e-924e-41b2-b98f-d2bbeb830c6a"
 StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 TJLF = "12ecd31c-256b-4db5-a799-cd5afeb0bd7d"
 
+[sources]
+AdaptiveArrayPools = {rev = "main", url = "https://github.com/ProjectTorreyPines/AdaptiveArrayPools.jl"}
+
 [compat]
+AdaptiveArrayPools = "0.1.0"
 BSON = "0.3"
 Flux = "0.14, 0.15, 0.16"
 GACODE = "1.0.4"

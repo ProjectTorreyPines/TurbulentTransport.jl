@@ -2,6 +2,7 @@ module TurbulentTransport
 
 using IMAS
 using IMASutils: argmin_abs
+using AdaptiveArrayPools
 import TJLF
 import TJLF: InputTGLF, InputTJLF
 import GACODE
@@ -22,8 +23,9 @@ include("utils.jl")
 
 include("buffered_layers.jl")
 
+include("pooled_layers.jl")
+
 export InputTGLF, InputTJLF
-export bufferize, BufferedDense, BufferedActivation
 
 const document = Dict()
 document[Symbol(@__MODULE__)] = [name for name in Base.names(@__MODULE__; all=false, imported=false) if name != Symbol(@__MODULE__)]

@@ -1,3 +1,5 @@
+using TurbulentTransport: bufferize, BufferedDense, BufferedActivation
+
 @testset "Bufferize" begin
     # Sample of representative models to test (covering different architectures)
     TEST_MODELS = [
