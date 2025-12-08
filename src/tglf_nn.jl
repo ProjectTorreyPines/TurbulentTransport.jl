@@ -29,6 +29,9 @@ struct TGLFNNmodel <: TGLFmodel
     xbounds::Array{Float64}
     ybounds::Array{Float64}
     nions::Int
+
+    # Pre-initialized PooledModel for zero-allocation inference (not serialized)
+    _pooled_fluxmodel::Union{Nothing,PooledModel}
 end
 
 function Base.show(io::IO, mime::MIME"text/plain", model::TGLFNNmodel)
@@ -89,6 +92,7 @@ PooledModel(model::TGLFNNmodel) = PooledModel(poolify(model.fluxmodel))
 function mod2dict(model::TGLFNNmodel)
     savedict = Dict()
     for name in fieldnames(TGLFNNmodel)
+        name === :_pooled_fluxmodel && continue  # Skip cache field (not serialized)
         value = getproperty(model, name)
         savedict[name] = value
     end
@@ -129,6 +133,8 @@ function dict2mod(savedict::AbstractDict)
         elseif name == :nions
             nions = maximum(map(m -> parse(Int, m[1]), filter(!isnothing, match.(r"_([0-9]+$)", savedict[:xnames])))) - 1
             push!(args, nions)
+        elseif name === :_pooled_fluxmodel
+            push!(args, PooledModel(poolify(savedict[:fluxmodel])))
         else
             push!(args, savedict[name])
         end
@@ -217,8 +223,7 @@ function flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; warn_nn_train_
     end
 
     # Single forward pass through the entire batch (pool reused for intermediates)
-    pm = get_pooled_model(fluxmodel.fluxmodel)
-    yy = pm(xx)
+    yy = fluxmodel._pooled_fluxmodel(xx)
 
     if fidelity == :GKNN
         return yy
@@ -263,8 +268,9 @@ function flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; warn_nn_train_
     end
 
     @. xx = (xx - fluxmodel.xm) / fluxmodel.xσ
-    pm = get_pooled_model(fluxmodel.fluxmodel)
-    yy = pm(xx) 
+
+    # Single forward pass through the entire batch (pool reused for intermediates)
+    yy = fluxmodel._pooled_fluxmodel(xx)
 
     if fidelity == :GKNN
         return yy

@@ -234,34 +234,3 @@ end
     return out
 end
 
-
-# Note: PooledModel(model::TGLFNNmodel) convenience constructor is in tglf_nn.jl
-
-#= ====================================== =#
-#  Global Cache for Pooled Models
-#= ====================================== =#
-
-# IdDict: O(1) lookup by object identity
-# Note: WeakKeyDict cannot be used because Flux.Chain is immutable (no finalizer support)
-# Memory bounded by number of unique loaded models (typically 1-5 via loadmodelonce)
-const _pooled_cache = IdDict{Any,PooledModel}()
-const _cache_lock = ReentrantLock()
-
-"""
-    get_pooled_model(chain) -> PooledModel
-
-Thread-safe cache for PooledModels.
-
-# Example
-```julia
-pm = get_pooled_model(model.fluxmodel)
-y = pm(x)  # zero-allocation after warmup
-```
-"""
-function get_pooled_model(chain)
-    lock(_cache_lock) do
-        return get!(_pooled_cache, chain) do
-            PooledModel(poolify(chain))
-        end
-    end
-end

@@ -13,7 +13,7 @@ include("input_tglfs.jl")
 
 include("tjlf.jl")
 
-include("pooled_layers.jl")  # Must be before tglf_nn.jl (provides get_pooled_model)
+include("pooled_layers.jl")  # Must be before tglf_nn.jl (provides PooledModel, poolify)
 
 include("tglf_nn.jl")
 
