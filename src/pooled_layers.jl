@@ -5,15 +5,20 @@
 # Dynamic memory pooling for Flux layers - no fixed max_batch required.
 # Uses AdaptiveArrayPools.jl for thread-safe, zero-allocation (after warmup) inference.
 #
-# Usage:
-#   pooled_model = poolify(flux_chain)
-#   @with_pool pool begin
-#       result = pooled_model(x)  # any batch size works
-#   end
+# Usage (simple - auto pool management):
+#   model = PooledModel(poolify(flux_chain))
+#   result = model(x)  # just call it!
+#
+# Usage (explicit - fine-grained control):
+#   pooled = poolify(flux_chain)
+#   y = @with_pool pool pooled(x)  # checkpoint → run → rewind
+#
+# Note: Pool memory is reused ACROSS @with_pool calls (after warmup),
+# not within a single block. Each @with_pool rewinds on exit.
 
 import Flux
 import LinearAlgebra: mul!
-using AdaptiveArrayPools: get_global_pool, acquire!
+using AdaptiveArrayPools: get_global_pool, acquire!, @with_pool
 
 #= ====================================== =#
 #  Activation Detection
@@ -184,3 +189,39 @@ Convert a TGLFNNmodel's fluxmodel to use pooled layers.
 function poolify(model::TGLFNNmodel)
     poolify(model.fluxmodel)
 end
+
+#= ====================================== =#
+#  PooledModel (Auto-managed pool wrapper)
+#= ====================================== =#
+
+"""
+    PooledModel{M}
+
+Wrapper that automatically manages `@with_pool` on each call.
+Use this when you want a simple callable interface without explicit pool management.
+
+# Example
+```julia
+# Create auto-managed pooled model
+model = PooledModel(poolify(flux_chain))
+
+# Just call it - no @with_pool needed!
+y = model(x)
+```
+
+# Notes
+- Each call does: checkpoint → run → rewind (pool memory reused across calls)
+- Thread-safe via task-local storage
+- After warmup, zero allocation for same-sized inputs
+- Equivalent to `@with_pool pool model(x)` but cleaner syntax
+"""
+struct PooledModel{M}
+    model::M
+end
+
+function (pm::PooledModel)(x)
+    @with_pool _pool pm.model(x)
+end
+
+# Convenience constructor
+PooledModel(model::TGLFNNmodel) = PooledModel(poolify(model.fluxmodel))
