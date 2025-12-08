@@ -567,7 +567,7 @@ Returns a vector of `flux_solution` structures
             _apply_stfpp_transform!(it; dtf=0.5, device="")
         end
     end
-    if model_filename in ("sat3_em_d3d_azf-1",) && fidelity == :GKNN
+    if model_filename == "sat3_em_d3d_azf-1" && fidelity == :GKNN
         tglfmod = loadmodelonce(model_filename * "_tglfnn24")
     else
         tglfmod = loadmodelonce(model_filename)
@@ -621,7 +621,7 @@ Returns a vector of `flux_solution` structures
         end
     end
 
-    sol = [flux_solution(tmp[:, i]...) for i in eachindex(input_tglfs)]
+    sol = [flux_solution(@view(tmp[:, i])) for i in eachindex(input_tglfs)]
     return sol
 end
 
@@ -919,6 +919,26 @@ function flux_solution(xx::Vararg{T}) where {T<:Real}
     end
     return sol
 end
+
+function flux_solution(xx::AbstractVector{T}) where {T<:Real}
+    n_fields = length(xx)
+    if n_fields == 4
+        ENERGY_FLUX_e = 3
+        ENERGY_FLUX_i = 4
+        PARTICLE_FLUX_e = 1
+        STRESS_TOR_i = 2
+        sol = GACODE.FluxSolution{T}(xx[ENERGY_FLUX_e], xx[ENERGY_FLUX_i], xx[PARTICLE_FLUX_e], T[], xx[STRESS_TOR_i])
+    else
+        ENERGY_FLUX_e = n_fields - 1
+        ENERGY_FLUX_i = n_fields
+        PARTICLE_FLUX_e = 1
+        PARTICLE_FLUX_i = 2:n_fields-3
+        STRESS_TOR_i = n_fields - 2
+        sol = GACODE.FluxSolution{T}(xx[ENERGY_FLUX_e], xx[ENERGY_FLUX_i], xx[PARTICLE_FLUX_e], T[xx[i] for i in PARTICLE_FLUX_i], xx[STRESS_TOR_i])
+    end
+    return sol
+end
+
 
 export run_tglfnn, run_tglfnn_onnx
 
