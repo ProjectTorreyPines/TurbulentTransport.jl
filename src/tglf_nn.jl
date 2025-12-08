@@ -290,9 +290,9 @@ Processes `[N_features, M_samples]` matrix through the model and writes results 
 @with_pool pool function flux_array!(out_y::AbstractMatrix{T}, fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
     N, M = size(x)  # N = input features, M = samples
 
-    # Acquire scratch matrix from pool (zero allocation after warmup)
+    # unsafe_acquire! returns Array (not ReshapedArray) to avoid boxing with non-concrete _pooled_chain
     xx = unsafe_acquire!(pool, T, size(x))
-
+    
     # Apply log10 transform where needed (determined by feature name)
     @inbounds for i in 1:N
         if contains(fluxmodel.xnames[i], log_suffix)
@@ -366,14 +366,11 @@ Processes one input vector through the model and writes results to `out_y`.
 - `warn_nn_train_bounds::Bool=true`: Warn if extrapolating beyond training bounds
 - `fidelity::Symbol=:TGLFNN`: Output mode (`:TGLFNN` for denormalized, `:GKNN` for normalized)
 
-# Performance
-Uses `unsafe_acquire!` from AdaptiveArrayPools.jl for zero-allocation scratch space.
-After warmup, this function allocates **0 bytes**.
 """
 @with_pool pool function flux_array!(out_y::AbstractVector{T}, fluxmodel::TGLFNNmodel, x::AbstractVector{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
     N = length(x)
 
-    # Acquire scratch vector from pool (zero allocation after warmup)
+    # unsafe_acquire! returns Array (not ReshapedArray) to avoid boxing with non-concrete _pooled_chain
     xx = unsafe_acquire!(pool, T, N)
 
     # Apply log10 transform where needed (determined by feature name)
