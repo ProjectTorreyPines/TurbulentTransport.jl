@@ -72,7 +72,9 @@ end
 #  Zero-allocation field extraction cache
 #= ====================================== =#
 
-# Cache for field symbols Val types (Any because each model has different Val{Tuple} type)
+# Cache for field symbols Val types. Uses content hash (not objectid) so:
+# - Same xnames content → same cache entry (memory efficient)
+# - Cache size bounded by unique xnames patterns, not model instances
 const _XNAMES_FIELD_SYMBOLS_CACHE = Dict{UInt64, Any}()
 
 """
@@ -82,7 +84,7 @@ Get cached `Val{Tuple{Symbol...}}` of InputTGLF field names from model's xnames.
 Strips `_log10` suffix: `"BETAE_log10"` → `:BETAE`
 """
 function _get_xnames_without_log10_suffix(model::TGLFNNmodel)
-    key = objectid(model.xnames)
+    key = hash(model.xnames)  # content-based, not objectid
     get!(_XNAMES_FIELD_SYMBOLS_CACHE, key) do
         symbols = Tuple(Symbol(endswith(x, log_suffix) ? x[1:end-n_log_suffix] : x) for x in model.xnames)
         Val(symbols)
