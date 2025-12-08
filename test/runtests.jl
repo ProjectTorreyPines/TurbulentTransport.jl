@@ -2,6 +2,8 @@ using Test
 using TurbulentTransport
 using TurbulentTransport: InputTGLF, flux_array, flux_solution, loadmodel, available_models
 using TurbulentTransport: TGLFNNmodel, TGLFNNensemble
+using TurbulentTransport: bufferize, BufferedDense, BufferedActivation
+import Flux
 using TurbulentTransport.Measurements
 
 # Relative tolerance for regression tests (allows cross-platform floating-point variance)
@@ -25,5 +27,6 @@ else
         include("test_run_tglfnn.jl")
         include("test_utils.jl")
         include("test_input_tglfs.jl")
+        include("test_bufferize.jl")
     end
 end

@@ -27,13 +27,18 @@ struct BufferedActivation{F, B<:AbstractMatrix}
     buffer::B
 end
 
-function (ba::BufferedActivation)(x::AbstractVecOrMat)
-    out_rows = size(x, 1)
-    out_cols = ndims(x) == 1 ? 1 : size(x, 2)
-    out = view(ba.buffer, 1:out_rows, 1:out_cols)
+# Full forward pass: view buffer, apply activation in-place
+@inline function _activation_forward!(ba::BufferedActivation, x::AbstractVecOrMat)
+    out = view(ba.buffer, 1:size(x, 1), 1:size(x, 2))
     out .= ba.σ.(x)
     return out
 end
+
+# Matrix input → Matrix output (2D view)
+(ba::BufferedActivation)(x::AbstractMatrix) = _activation_forward!(ba, x)
+
+# Vector input → Vector output (1D view via vec(), no allocation)
+(ba::BufferedActivation)(x::AbstractVector) = vec(_activation_forward!(ba, x))
 
 # Known activation functions that can be wrapped
 const BUFFERABLE_ACTIVATIONS = (
@@ -59,18 +64,21 @@ struct BufferedDense{D<:Flux.Dense, B<:AbstractMatrix}
     buffer::B
 end
 
-function (bd::BufferedDense)(x::AbstractVecOrMat)
+# Full forward pass: type check, eltype match, view, matmul, bias+activation
+@inline function _dense_forward!(bd::BufferedDense, x::AbstractVecOrMat)
     d = bd.dense
     Flux._size_check(d, x, 1 => size(d.weight, 2))
     xT = Flux._match_eltype(d, x)
-
-    out_rows = size(d.weight, 1)
-    out_cols = ndims(xT) == 1 ? 1 : size(xT, 2)
-    out = view(bd.buffer, 1:out_rows, 1:out_cols)
-
+    out = view(bd.buffer, 1:size(d.weight, 1), 1:size(xT, 2))
     mul!(out, d.weight, xT)
     return Flux.NNlib.bias_act!(d.σ, out, d.bias)
 end
+
+# Matrix input → Matrix output (2D view)
+(bd::BufferedDense)(x::AbstractMatrix) = _dense_forward!(bd, x)
+
+# Vector input → Vector output (1D view via vec(), no allocation)
+(bd::BufferedDense)(x::AbstractVector) = vec(_dense_forward!(bd, x))
 
 #= ====================================== =#
 #  Model Bufferization
