@@ -355,28 +355,46 @@ end
 
 Ensemble batched inference: runs all models in parallel, returns mean (± std if `uncertain=true`).
 """
-function flux_array(fluxensemble::TGLFNNensemble, x::AbstractArray{T}; uncertain::Bool=false, warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
+@with_pool pool function flux_array(fluxensemble::TGLFNNensemble, x::AbstractArray{T}; uncertain::Bool=false, warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
     nmodels = length(fluxensemble.models)
     nouts = length(fluxensemble.models[1].ynames)
     if fidelity == :GKNN
         nouts = div(nouts, 2)
     end
-    nsamples = size(x)[2]
+    nsamples = size(x, 2)
 
-    tmp = zeros(T, nmodels, nouts, nsamples)
-    Threads.@threads for k in 1:length(fluxensemble.models)
-        tmp[k, :, :] = flux_array(fluxensemble.models[k], x; warn_nn_train_bounds=(warn_nn_train_bounds && k == 1), fidelity)
+    # Store each model's output: (nouts, nsamples, nmodels) for efficient slice access
+    each_y = unsafe_acquire!(pool, T, nouts, nsamples)
+    all_yy = unsafe_acquire!(pool, T, nouts, nsamples, nmodels)
+
+    # Threads.@threads for k in 1:nmodels
+    for k in 1:nmodels
+        # tmp[:, :, k] = flux_array(fluxensemble.models[k], x; warn_nn_train_bounds=(warn_nn_train_bounds && k == 1), fidelity)
+        flux_array!(each_y, fluxensemble.models[k], x; warn_nn_train_bounds=(warn_nn_train_bounds && k == 1), fidelity)
+        all_yy[:, :, k] = each_y
     end
 
-    mean, std = StatsBase.mean_and_std(tmp, 1; corrected=true)
+    # Compute mean using broadcasting
+    mean_out = zeros(T, nouts, nsamples)
+    @inbounds for k in 1:nmodels
+        @. @views mean_out += all_yy[:, :, k]
+    end
+    mean_out ./= nmodels
+
     if uncertain && nmodels > 1
         if T <: Measurements.Measurement
-            return mean[1, :, :]
+            return mean_out
         else
-            return Measurements.measurement.(mean[1, :, :], std[1, :, :])
+            # Compute std using broadcasting
+            std_out = zeros(T, nouts, nsamples)
+            @inbounds for k in 1:nmodels
+                @. @views std_out += (all_yy[:, :, k] - mean_out)^2
+            end
+            @. std_out = sqrt(std_out / (nmodels - 1))
+            return Measurements.measurement.(mean_out, std_out)
         end
     else
-        return mean[1, :, :]
+        return mean_out
     end
 end
 
@@ -385,27 +403,43 @@ end
 
 Ensemble single-sample inference: runs all models on one vector, returns mean (± std if `uncertain=true`).
 """
-function flux_array(fluxensemble::TGLFNNensemble, x::AbstractVector{T}; uncertain::Bool=false, warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
+@with_pool pool function flux_array(fluxensemble::TGLFNNensemble, x::AbstractVector{T}; uncertain::Bool=false, warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
     nmodels = length(fluxensemble.models)
     nouts = length(fluxensemble.models[1].ynames)
     if fidelity == :GKNN
         nouts = div(nouts, 2)
     end
 
-    tmp = zeros(T, nmodels, nouts)
-    Threads.@threads for k in 1:length(fluxensemble.models)
-        tmp[k, :] = flux_array(fluxensemble.models[k], x; warn_nn_train_bounds=(warn_nn_train_bounds && k == 1), fidelity)
+    # Store each model's output: (nouts, nmodels) for efficient slice access
+    each_y = unsafe_acquire!(pool, T, nouts)
+    all_yy = unsafe_acquire!(pool, T, nouts, nmodels)
+    for k in 1:nmodels
+        flux_array!(each_y, fluxensemble.models[k], x; warn_nn_train_bounds=(warn_nn_train_bounds && k == 1), fidelity)
+        all_yy[:, k] = each_y
     end
 
-    mean, std = StatsBase.mean_and_std(tmp, 1; corrected=true)
-    if uncertain
+    # Compute mean using broadcasting
+    mean_out = zeros(T, nouts)
+    @inbounds for k in 1:nmodels
+        @. @views mean_out += all_yy[:, k]
+    end
+    mean_out ./= nmodels
+
+    if uncertain && nmodels > 1
+        # Compute std using broadcasting
+        std_out = zeros(T, nouts)
+        @inbounds for k in 1:nmodels
+            @. @views std_out += (all_yy[:, k] - mean_out)^2
+        end
+        @. std_out = sqrt(std_out / (nmodels - 1))
+
         if T <: Measurements.Measurement
-            return mean[1, :]
+            return mean_out
         else
-            return Measurements.measurement.(mean[1, :], std[1, :])
+            return Measurements.measurement.(mean_out, std_out)
         end
     else
-        return mean[1, :]
+        return mean_out
     end
 end
 
