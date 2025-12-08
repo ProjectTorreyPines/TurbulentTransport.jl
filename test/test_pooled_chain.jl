@@ -359,4 +359,31 @@ using TurbulentTransport: poolify, PooledChain, PooledDense, PooledActivation, P
             @test y_orig == y_pooled
         end
     end
+
+    @testset "Thread safety (task-local pools)" begin
+        # PooledChain uses task-local storage, so concurrent access should be safe
+        # Each thread gets its own pool → no data races
+        if Threads.nthreads() > 1
+            ensemble = loadmodel("sat2_em_d3d_azf-1")
+            model = ensemble.models[1]
+            pm = PooledChain(model)
+            x = generate_valid_input(model)
+
+            # Warmup
+            pm(x)
+
+            # Concurrent access from multiple threads
+            nthreads = Threads.nthreads()
+            results = Vector{Vector{Float64}}(undef, nthreads)
+
+            Threads.@threads for i in 1:nthreads
+                results[i] = pm(x)
+            end
+
+            # All threads should produce identical results
+            @test all(r == results[1] for r in results)
+        else
+            @info "Skipping thread safety test (single-threaded Julia)"
+        end
+    end
 end

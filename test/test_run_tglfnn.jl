@@ -239,3 +239,20 @@ end
         end
     end
 end
+
+@testset "run_tglfnn edge cases" begin
+    @testset "Empty input vector" begin
+        # run_tglfnn with empty input should return empty results (not error)
+        empty_inputs = InputTGLF{Float64}[]
+
+        result = TurbulentTransport.run_tglfnn(
+            empty_inputs;
+            model_filename="sat3_em_d3d_azf-1",
+            warn_nn_train_bounds=false,
+            fidelity=:TGLFNN
+        )
+
+        @test result isa Vector
+        @test isempty(result)
+    end
+end
