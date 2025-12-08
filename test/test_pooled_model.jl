@@ -97,6 +97,36 @@ using TurbulentTransport: poolify, PooledModel, PooledDense, PooledActivation, P
         @test y_orig == y_pooled
     end
 
+    @testset "PooledModel zero-allocation after warmup" begin
+        ensemble = loadmodel("sat2_em_d3d_azf-1")
+        model = ensemble.models[1]
+        pm = PooledModel(model)
+
+        # Test with various batch sizes
+        @testset "Batch size: $batch_size" for batch_size in [1, 10, 50]
+            x = generate_valid_input_matrix(model, batch_size)
+
+            # Warmup call - this allocates pool memory
+            pm(x)
+
+            # Subsequent calls with same size should be zero-allocation
+            allocs = @allocated pm(x)
+            @test allocs == 0
+        end
+
+        # Test vector input
+        @testset "Vector input" begin
+            x_vec = generate_valid_input(model)
+
+            # Warmup
+            pm(x_vec)
+
+            # Should be zero-allocation
+            allocs = @allocated pm(x_vec)
+            @test allocs == 0
+        end
+    end
+
     @testset "PooledDense and PooledActivation types" begin
         ensemble = loadmodel("sat2_em_d3d_azf-1")
         model = ensemble.models[1]
