@@ -409,6 +409,63 @@ Processes one input vector through the model and writes results to `out_y`.
     end
 end
 
+
+#= ====================================== =#
+#  Ensemble inference helpers (function barriers for type stability)
+#= ====================================== =#
+
+"""
+    _flux_array_sequential!(all_yy, fluxensemble, x; ...) -> nothing
+
+Sequential ensemble inference. Reuses single buffer across models (zero-alloc after warmup).
+"""
+@with_pool pool function _flux_array_sequential!(all_yy::AbstractArray{T,3}, fluxensemble::TGLFNNensemble, x::AbstractArray{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
+    nouts, nsamples, nmodels = size(all_yy)
+    each_y = unsafe_acquire!(pool, T, nouts, nsamples)
+    for k in 1:nmodels
+        flux_array!(each_y, fluxensemble.models[k], x; warn_nn_train_bounds=(warn_nn_train_bounds && k == 1), fidelity)
+        all_yy[:, :, k] = each_y
+    end
+end
+
+# Vector input variant
+@with_pool pool function _flux_array_sequential!(all_yy::AbstractMatrix{T}, fluxensemble::TGLFNNensemble, x::AbstractVector{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
+    nouts, nmodels = size(all_yy)
+    each_y = unsafe_acquire!(pool, T, nouts)
+    for k in 1:nmodels
+        flux_array!(each_y, fluxensemble.models[k], x; warn_nn_train_bounds=(warn_nn_train_bounds && k == 1), fidelity)
+        all_yy[:, k] = each_y
+    end
+end
+
+"""
+    _flux_array_threaded!(all_yy, fluxensemble, x; ...) -> nothing
+
+Threaded ensemble inference. Each thread uses its own pool buffer (thread-safe).
+"""
+function _flux_array_threaded!(all_yy::AbstractArray{T,3}, fluxensemble::TGLFNNensemble, x::AbstractArray{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
+    nouts, nsamples, nmodels = size(all_yy)
+    Threads.@threads for k in 1:nmodels
+        @with_pool thread_pool begin
+            each_y = unsafe_acquire!(thread_pool, T, nouts, nsamples)
+            flux_array!(each_y, fluxensemble.models[k], x; warn_nn_train_bounds=(warn_nn_train_bounds && k == 1), fidelity)
+            all_yy[:, :, k] = each_y
+        end
+    end
+end
+
+# Vector input variant
+function _flux_array_threaded!(all_yy::AbstractMatrix{T}, fluxensemble::TGLFNNensemble, x::AbstractVector{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
+    nouts, nmodels = size(all_yy)
+    Threads.@threads for k in 1:nmodels
+        @with_pool thread_pool begin
+            each_y = unsafe_acquire!(thread_pool, T, nouts)
+            flux_array!(each_y, fluxensemble.models[k], x; warn_nn_train_bounds=(warn_nn_train_bounds && k == 1), fidelity)
+            all_yy[:, k] = each_y
+        end
+    end
+end
+
 """
     flux_array(fluxensemble::TGLFNNensemble, x::AbstractArray{T}; ...) where {T<:Real}
 
@@ -423,14 +480,11 @@ Ensemble batched inference: runs all models in parallel, returns mean (Â± std if
     nsamples = size(x, 2)
 
     # Store each model's output: (nouts, nsamples, nmodels) for efficient slice access
-    each_y = unsafe_acquire!(pool, T, nouts, nsamples)
     all_yy = unsafe_acquire!(pool, T, nouts, nsamples, nmodels)
-
-    # Threads.@threads for k in 1:nmodels
-    for k in 1:nmodels
-        # tmp[:, :, k] = flux_array(fluxensemble.models[k], x; warn_nn_train_bounds=(warn_nn_train_bounds && k == 1), fidelity)
-        flux_array!(each_y, fluxensemble.models[k], x; warn_nn_train_bounds=(warn_nn_train_bounds && k == 1), fidelity)
-        all_yy[:, :, k] = each_y
+    if Threads.nthreads() == 1
+        _flux_array_sequential!(all_yy, fluxensemble, x; warn_nn_train_bounds, fidelity)
+    else
+        _flux_array_threaded!(all_yy, fluxensemble, x; warn_nn_train_bounds, fidelity)
     end
 
     # Compute mean using broadcasting
@@ -470,11 +524,11 @@ Ensemble single-sample inference: runs all models on one vector, returns mean (Â
     end
 
     # Store each model's output: (nouts, nmodels) for efficient slice access
-    each_y = unsafe_acquire!(pool, T, nouts)
     all_yy = unsafe_acquire!(pool, T, nouts, nmodels)
-    for k in 1:nmodels
-        flux_array!(each_y, fluxensemble.models[k], x; warn_nn_train_bounds=(warn_nn_train_bounds && k == 1), fidelity)
-        all_yy[:, k] = each_y
+    if Threads.nthreads() == 1
+        _flux_array_sequential!(all_yy, fluxensemble, x; warn_nn_train_bounds, fidelity)
+    else
+        _flux_array_threaded!(all_yy, fluxensemble, x; warn_nn_train_bounds, fidelity)
     end
 
     # Compute mean using broadcasting

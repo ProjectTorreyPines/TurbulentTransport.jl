@@ -234,4 +234,3 @@ end
     copyto!(out, pm.model(x))
     return out
 end
-
