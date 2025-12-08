@@ -188,7 +188,7 @@ end
 #= ====================================== =#
 
 """
-    PooledModel{M}
+    PooledModel{M<:Flux.Chain}
 
 Wrapper that automatically manages `@with_pool` on each call.
 Use this when you want a simple callable interface without explicit pool management.
@@ -209,8 +209,9 @@ model(y, x)  # writes result to y
 - In-place `model(out, x)`: uses `copyto!`, truly zero-allocation after warmup
 - Thread-safe via task-local storage
 - Pool intermediates are reused across calls
+- Type parameter `M` preserves concrete Chain type for zero-allocation dispatch
 """
-struct PooledModel{M}
+struct PooledModel{M<:Flux.Chain}
     model::M
 end
 

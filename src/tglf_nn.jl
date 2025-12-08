@@ -31,7 +31,7 @@ struct TGLFNNmodel <: TGLFmodel
     nions::Int
 
     # Pre-initialized PooledModel for zero-allocation inference (not serialized)
-    _pooled_fluxmodel::Union{Nothing,PooledModel}
+    _pooled_fluxmodel::PooledModel
 end
 
 function Base.show(io::IO, mime::MIME"text/plain", model::TGLFNNmodel)
@@ -222,12 +222,9 @@ function flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; warn_nn_train_
         end
     end
 
-    # Single forward pass through the entire batch (pool reused for intermediates)
-    if fluxmodel._pooled_fluxmodel === nothing
-        yy = fluxmodel.fluxmodel(xx)::Matrix{Float64}
-    else
+    # Forward pass via PooledModel (backed by AdaptiveArrayPools.jl)
+        # Eliminates intermediate allocations during Flux.Chain evaluation
         yy = fluxmodel._pooled_fluxmodel(xx)
-    end
 
     if fidelity == :GKNN
         return yy
@@ -273,11 +270,9 @@ function flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; warn_nn_train_
 
     @. xx = (xx - fluxmodel.xm) / fluxmodel.xσ
 
-    if fluxmodel._pooled_fluxmodel === nothing
-        yy = fluxmodel.fluxmodel(xx)::Vector{Float64}
-    else
+    # Forward pass via PooledModel (backed by AdaptiveArrayPools.jl)
+    # Eliminates intermediate allocations during Flux.Chain evaluation
         yy = fluxmodel._pooled_fluxmodel(xx)
-    end
 
     if fidelity == :GKNN
         return yy
