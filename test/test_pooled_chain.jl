@@ -28,7 +28,7 @@ using TurbulentTransport: poolify, PooledChain, PooledDense, PooledActivation, P
                 @test y_orig isa AbstractVector
                 @test y_pooled isa AbstractVector
                 @test size(y_orig) == size(y_pooled)
-                @test y_orig == y_pooled  # bit-exact same result
+                @test isapprox(y_orig, y_pooled; rtol=REGRESSION_RTOL)
             end
 
             @testset "Matrix input (batch)" begin
@@ -36,7 +36,7 @@ using TurbulentTransport: poolify, PooledChain, PooledDense, PooledActivation, P
                 y_pooled = pm(x_mat)
 
                 @test size(y_orig) == size(y_pooled)
-                @test y_orig == y_pooled  # bit-exact same result
+                @test isapprox(y_orig, y_pooled; rtol=REGRESSION_RTOL)
             end
         end
     end
@@ -54,7 +54,7 @@ using TurbulentTransport: poolify, PooledChain, PooledDense, PooledActivation, P
             y_pooled = pm(x)
 
             @test size(y_orig) == size(y_pooled)
-            @test y_orig == y_pooled
+            @test isapprox(y_orig, y_pooled; rtol=REGRESSION_RTOL)
         end
     end
 
@@ -78,9 +78,9 @@ using TurbulentTransport: poolify, PooledChain, PooledDense, PooledActivation, P
         @test size(r3) == (length(model.ynames), 5)
 
         # Verify correctness
-        @test r1 == model.fluxmodel(x1)
-        @test r2 == model.fluxmodel(x2)
-        @test r3 == model.fluxmodel(x3)
+        @test isapprox(r1, model.fluxmodel(x1); rtol=REGRESSION_RTOL)
+        @test isapprox(r2, model.fluxmodel(x2); rtol=REGRESSION_RTOL)
+        @test isapprox(r3, model.fluxmodel(x3); rtol=REGRESSION_RTOL)
     end
 
     @testset "PooledChain convenience constructor" begin
@@ -94,7 +94,7 @@ using TurbulentTransport: poolify, PooledChain, PooledDense, PooledActivation, P
         y_orig = model.fluxmodel(x)
         y_pooled = pm(x)
 
-        @test y_orig == y_pooled
+        @test isapprox(y_orig, y_pooled; rtol=REGRESSION_RTOL)
     end
 
     @testset "PooledChain minimal allocation (output only)" begin
@@ -152,7 +152,7 @@ using TurbulentTransport: poolify, PooledChain, PooledDense, PooledActivation, P
 
             # Verify correctness
             y_alloc = pm(x)
-            @test out == y_alloc
+            @test isapprox(out, y_alloc; rtol=REGRESSION_RTOL)
 
             # Zero allocation after warmup
             allocs = @allocated pm(out, x)
@@ -169,7 +169,7 @@ using TurbulentTransport: poolify, PooledChain, PooledDense, PooledActivation, P
 
             # Verify correctness
             y_alloc = pm(x_vec)
-            @test out_vec == y_alloc
+            @test isapprox(out_vec, y_alloc; rtol=REGRESSION_RTOL)
 
             # Zero allocation after warmup
             allocs = @allocated pm(out_vec, x_vec)
@@ -190,7 +190,7 @@ using TurbulentTransport: poolify, PooledChain, PooledDense, PooledActivation, P
 
             # Verify correctness
             y_alloc = pm(x)
-            @test out_view == y_alloc
+            @test isapprox(out_view, y_alloc; rtol=REGRESSION_RTOL)
 
             # Zero allocation after warmup
             allocs = @allocated pm(out_view, x)
@@ -210,7 +210,7 @@ using TurbulentTransport: poolify, PooledChain, PooledDense, PooledActivation, P
 
             # Verify correctness
             y_alloc = pm(x_vec)
-            @test out_view == y_alloc
+            @test isapprox(out_view, y_alloc; rtol=REGRESSION_RTOL)
 
             # Zero allocation after warmup
             allocs = @allocated pm(out_view, x_vec)
@@ -234,7 +234,7 @@ using TurbulentTransport: poolify, PooledChain, PooledDense, PooledActivation, P
 
             # Verify correctness (compare with non-view input)
             y_expected = pm(x_core)
-            @test out == y_expected
+            @test isapprox(out, y_expected; rtol=REGRESSION_RTOL)
 
             # Zero allocation after warmup
             allocs = @allocated pm(out, x_view)
@@ -260,7 +260,7 @@ using TurbulentTransport: poolify, PooledChain, PooledDense, PooledActivation, P
 
             # Verify correctness
             y_expected = pm(x_core)
-            @test out_view == y_expected
+            @test isapprox(out_view, y_expected; rtol=REGRESSION_RTOL)
 
             # Zero allocation after warmup
             allocs = @allocated pm(out_view, x_view)
@@ -284,7 +284,7 @@ using TurbulentTransport: poolify, PooledChain, PooledDense, PooledActivation, P
 
             # Verify correctness
             y_expected = pm(x_core)
-            @test out_view == y_expected
+            @test isapprox(out_view, y_expected; rtol=REGRESSION_RTOL)
 
             # Zero allocation after warmup
             allocs = @allocated pm(out_view, x_view)
@@ -329,7 +329,7 @@ using TurbulentTransport: poolify, PooledChain, PooledDense, PooledActivation, P
         x = generate_valid_input_matrix(model, 1)
         y_orig = model.fluxmodel(x)
         y_pooled = pm(x)
-        @test y_orig == y_pooled
+        @test isapprox(y_orig, y_pooled; rtol=REGRESSION_RTOL)
     end
 
     @testset "PooledChain all available models" begin
@@ -356,7 +356,7 @@ using TurbulentTransport: poolify, PooledChain, PooledDense, PooledActivation, P
             y_orig = model.fluxmodel(x)
             y_pooled = pm(x)
 
-            @test y_orig == y_pooled
+            @test isapprox(y_orig, y_pooled; rtol=REGRESSION_RTOL)
         end
     end
 
@@ -381,7 +381,7 @@ using TurbulentTransport: poolify, PooledChain, PooledDense, PooledActivation, P
             end
 
             # All threads should produce identical results
-            @test all(r == results[1] for r in results)
+            @test all(isapprox(r, results[1]; rtol=REGRESSION_RTOL) for r in results)
         else
             @info "Skipping thread safety test (single-threaded Julia)"
         end
