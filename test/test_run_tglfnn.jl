@@ -166,3 +166,76 @@ using GACODE: FluxSolution
         @test result_sat2.STRESS_TOR_i ≈ EXPECTED_RUN_TGLFNN_SAT2.STRESS_TOR_i rtol=REGRESSION_RTOL
     end
 end
+
+"""
+Regression tests for run_tglfnn across models and fidelity modes.
+
+Tests single vs vector version equivalence and regression against baseline values.
+Expected values defined in fixtures.jl (REGRESSION_EXPECTED_VALUES).
+"""
+# Helper: test flux values against expected
+function test_regression_flux_values(sol::FluxSolution, expected::NamedTuple; rtol=REGRESSION_RTOL)
+    @test isapprox(sol.ENERGY_FLUX_e, expected.ENERGY_FLUX_e; rtol=rtol)
+    @test isapprox(sol.ENERGY_FLUX_i, expected.ENERGY_FLUX_i; rtol=rtol)
+    @test isapprox(sol.PARTICLE_FLUX_e, expected.PARTICLE_FLUX_e; rtol=rtol)
+    @test isapprox(sol.STRESS_TOR_i, expected.STRESS_TOR_i; rtol=rtol)
+end
+
+@testset "run_tglfnn Regression" begin
+    inputs = create_regression_inputs()
+
+    for (model_filename, fidelity, description) in REGRESSION_MODEL_CONFIGS
+        @testset "$description ($model_filename)" begin
+
+            @testset "Single version values" begin
+                for (i, input) in enumerate(inputs)
+                    sol = TurbulentTransport.run_tglfnn(
+                        input;
+                        model_filename=model_filename,
+                        warn_nn_train_bounds=false,
+                        fidelity=fidelity
+                    )
+                    expected = REGRESSION_EXPECTED_VALUES[(model_filename, fidelity, i)]
+                    test_regression_flux_values(sol, expected)
+                end
+            end
+
+            @testset "Vector version values" begin
+                sols = TurbulentTransport.run_tglfnn(
+                    inputs;
+                    model_filename=model_filename,
+                    warn_nn_train_bounds=false,
+                    fidelity=fidelity
+                )
+                for (i, sol) in enumerate(sols)
+                    expected = REGRESSION_EXPECTED_VALUES[(model_filename, fidelity, i)]
+                    test_regression_flux_values(sol, expected)
+                end
+            end
+
+            @testset "Single vs Vector equivalence" begin
+                single_results = [
+                    TurbulentTransport.run_tglfnn(
+                        input;
+                        model_filename=model_filename,
+                        warn_nn_train_bounds=false,
+                        fidelity=fidelity
+                    ) for input in inputs
+                ]
+                vector_results = TurbulentTransport.run_tglfnn(
+                    inputs;
+                    model_filename=model_filename,
+                    warn_nn_train_bounds=false,
+                    fidelity=fidelity
+                )
+
+                for (s, v) in zip(single_results, vector_results)
+                    @test isapprox(s.ENERGY_FLUX_e, v.ENERGY_FLUX_e; rtol=REGRESSION_RTOL)
+                    @test isapprox(s.ENERGY_FLUX_i, v.ENERGY_FLUX_i; rtol=REGRESSION_RTOL)
+                    @test isapprox(s.PARTICLE_FLUX_e, v.PARTICLE_FLUX_e; rtol=REGRESSION_RTOL)
+                    @test isapprox(s.STRESS_TOR_i, v.STRESS_TOR_i; rtol=REGRESSION_RTOL)
+                end
+            end
+        end
+    end
+end
