@@ -21,8 +21,6 @@ include("qlgyro.jl")
 
 include("utils.jl")
 
-include("buffered_layers.jl")
-
 include("pooled_layers.jl")
 
 export InputTGLF, InputTJLF

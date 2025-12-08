@@ -25,6 +25,5 @@ else
     include("test_run_tglfnn.jl")
     include("test_utils.jl")
     include("test_input_tglfs.jl")
-    include("test_bufferize.jl")
     include("test_poolify.jl")
 end

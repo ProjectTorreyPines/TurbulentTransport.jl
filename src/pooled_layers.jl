@@ -16,6 +16,19 @@ import LinearAlgebra: mul!
 using AdaptiveArrayPools: get_global_pool, acquire!
 
 #= ====================================== =#
+#  Activation Detection
+#= ====================================== =#
+
+# Known activation functions that can be wrapped
+const POOLABLE_ACTIVATIONS = (
+    Flux.elu, Flux.relu, Flux.leakyrelu, Flux.selu, Flux.celu, Flux.gelu,
+    Flux.sigmoid, Flux.hardsigmoid, Flux.hardtanh, Flux.tanh, Flux.softsign,
+    Flux.softplus, Flux.swish, Flux.mish, Flux.lisht, Flux.tanhshrink
+)
+
+is_poolable_activation(f) = f in POOLABLE_ACTIVATIONS
+
+#= ====================================== =#
 #  PooledActivation
 #= ====================================== =#
 
@@ -122,8 +135,7 @@ end
 
 Recursively convert a Flux model to use pooled layers.
 
-Unlike `bufferize`, no `max_batch` is required - the pool dynamically
-handles any batch size.
+No `max_batch` is required - the pool dynamically handles any batch size.
 
 # Example
 ```julia
@@ -147,7 +159,7 @@ end
 function poolify(layer)
     if layer isa Flux.Dense
         return PooledDense(layer)
-    elseif is_bufferable_activation(layer)
+    elseif is_poolable_activation(layer)
         return PooledActivation(layer)
     elseif layer isa Flux.Chain
         return Flux.Chain(map(poolify, layer.layers)...)

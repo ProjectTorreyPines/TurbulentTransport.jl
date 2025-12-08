@@ -1,6 +1,6 @@
 # Test poolify with AdaptiveArrayPools
 using TurbulentTransport.AdaptiveArrayPools: @with_pool
-using TurbulentTransport: poolify, PooledDense, PooledActivation, PooledParallelAdd, bufferize
+using TurbulentTransport: poolify, PooledDense, PooledActivation, PooledParallelAdd
 
 @testset "Poolify" begin
         # Sample models to test
@@ -95,21 +95,6 @@ using TurbulentTransport: poolify, PooledDense, PooledActivation, PooledParallel
 
             # Check that the wrapped dense is preserved
             @test first_layer.dense isa Flux.Dense
-        end
-
-        @testset "poolify vs bufferize comparison" begin
-            ensemble = loadmodel("sat2_em_d3d_azf-1")
-            model = ensemble.models[1]
-
-            pooled = poolify(model.fluxmodel)
-            buffered = bufferize(model.fluxmodel, 100)
-
-            x = generate_valid_input_matrix(model, 50)
-
-            y_pooled = @with_pool pool pooled(x)
-            y_buffered = buffered(x)
-
-            @test y_pooled == y_buffered
         end
 
         @testset "PooledParallelAdd for ResNet blocks" begin
