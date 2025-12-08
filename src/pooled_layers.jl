@@ -83,7 +83,7 @@ end
     d = pd.dense
     Flux._size_check(d, x, 1 => size(d.weight, 2))
     xT = Flux._match_eltype(d, x)
-        out = acquire!(pool, Float64, size(d.weight, 1), size(xT, 2))  # Vector output
+    out = acquire!(pool, Float64, size(d.weight, 1), size(xT, 2))  # Vector output
     mul!(out, d.weight, xT)
     return Flux.NNlib.bias_act!(d.σ, out, d.bias)
 end
