@@ -18,7 +18,7 @@
 
 import Flux
 import LinearAlgebra: mul!
-using AdaptiveArrayPools: get_global_pool, acquire!, @with_pool
+using AdaptiveArrayPools: get_task_local_pool, acquire!, @with_pool
 
 #= ====================================== =#
 #  Activation Detection
@@ -50,7 +50,7 @@ struct PooledActivation{F}
 end
 
 @inline function _pooled_activation_forward!(pa::PooledActivation, x::AbstractVecOrMat)
-    pool = get_global_pool()
+    pool = get_task_local_pool()
     out = acquire!(pool, Float64, size(x))
     out .= pa.σ.(x)
     return out
@@ -79,7 +79,7 @@ struct PooledDense{D<:Flux.Dense}
 end
 
 @inline function _pooled_dense_forward!(pd::PooledDense, x::AbstractVecOrMat)
-    pool = get_global_pool()
+    pool = get_task_local_pool()
     d = pd.dense
     Flux._size_check(d, x, 1 => size(d.weight, 2))
     xT = Flux._match_eltype(d, x)
