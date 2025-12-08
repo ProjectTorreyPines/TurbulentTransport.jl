@@ -21,10 +21,10 @@ StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 TJLF = "12ecd31c-256b-4db5-a799-cd5afeb0bd7d"
 
 [sources]
-AdaptiveArrayPools = {rev = "main", url = "https://github.com/ProjectTorreyPines/AdaptiveArrayPools.jl"}
+AdaptiveArrayPools = {rev = "v0.1.1", url = "https://github.com/ProjectTorreyPines/AdaptiveArrayPools.jl"}
 
 [compat]
-AdaptiveArrayPools = "0.1.0"
+AdaptiveArrayPools = "0.1.1"
 BSON = "0.3"
 Flux = "0.14, 0.15, 0.16"
 GACODE = "1.0.4"
