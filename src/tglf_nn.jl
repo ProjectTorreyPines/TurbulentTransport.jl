@@ -369,6 +369,7 @@ function run_tglfnn(input_tglf::InputTGLF{T}; model_filename::String, uncertain:
         inputs[k] = getfield(input_tglf, Symbol(item))
     end
     sol = tglfmod(inputs...; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
+    # Main.@infiltrate
     if fidelity == :GKNN
         supported_gknn_models = ["sat3_em_d3d_azf-1", "sat3_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d_azf-1_withnegD", "sat3_em_d3d_azf-1_gkdb", "sat2_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d+mastu_azf-1"]
         if !(model_filename in supported_gknn_models)
