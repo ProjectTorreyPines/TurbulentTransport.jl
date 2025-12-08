@@ -181,12 +181,49 @@ end
 Batched inference: processes entire `[N_features, M_samples]` matrix in single forward pass.
 """
 function flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
+    yy = Matrix{T}(undef, length(fluxmodel.ynames), size(x, 2))
+    flux_array!(yy, fluxmodel, x; warn_nn_train_bounds, fidelity)
+    return yy
+end
+
+"""
+    flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; ...) where {T<:Real}
+
+Single-sample inference: processes one vector through the model.
+"""
+function flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN, xx::AbstractVector{T}=similar(x)) where {T<:Real}
+    yy = Vector{T}(undef, length(fluxmodel.ynames))
+    flux_array!(yy, fluxmodel, x; warn_nn_train_bounds, fidelity)
+    return yy
+end
+
+
+"""
+    flux_array!(out_y::AbstractMatrix{T}, fluxmodel::TGLFNNmodel, x::AbstractMatrix{T};
+                warn_nn_train_bounds=true, fidelity=:TGLFNN) where {T<:Real}
+
+In-place batched inference with **zero allocation** (requires AdaptiveArrayPools.jl v0.2.1+).
+
+Processes `[N_features, M_samples]` matrix through the model and writes results to `out_y`.
+
+# Arguments
+- `out_y::AbstractMatrix{T}`: Pre-allocated output matrix `[N_outputs, M_samples]`
+- `fluxmodel::TGLFNNmodel`: Neural network model
+- `x::AbstractMatrix{T}`: Input features `[N_features, M_samples]`
+- `warn_nn_train_bounds::Bool=true`: Warn if extrapolating beyond training bounds
+- `fidelity::Symbol=:TGLFNN`: Output mode (`:TGLFNN` for denormalized, `:GKNN` for normalized)
+
+# Performance
+Uses `unsafe_acquire!` from AdaptiveArrayPools.jl for zero-allocation scratch space.
+After warmup, this function allocates **0 bytes**.
+"""
+@with_pool pool function flux_array!(out_y::AbstractMatrix{T}, fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
     N, M = size(x)  # N = input features, M = samples
 
-    # Allocate working matrix (same type as input)
-    xx = similar(x)
+    # Acquire scratch matrix from pool (zero allocation after warmup)
+    xx = unsafe_acquire!(pool, T, size(x))
 
-    # Apply log10 transform where needed (name-based check)
+    # Apply log10 transform where needed (determined by feature name)
     @inbounds for i in 1:N
         if contains(fluxmodel.xnames[i], log_suffix)
             for j in 1:M
@@ -199,7 +236,7 @@ function flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; warn_nn_train_
         end
     end
 
-    # Bounds checking (only on first column to avoid spam)
+    # Validate bounds (check first sample only to avoid warning spam)
     if warn_nn_train_bounds
         for ix in 1:N
             val = xx[ix, 1]
@@ -213,7 +250,7 @@ function flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; warn_nn_train_
         end
     end
 
-    # Normalize: (xx - mean) / std
+    # Normalize inputs: (xx - mean) / std
     @inbounds for i in 1:N
         xm_i = fluxmodel.xm[i]
         xσ_i = fluxmodel.xσ[i]
@@ -222,40 +259,59 @@ function flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; warn_nn_train_
         end
     end
 
-    # Forward pass via PooledChain (backed by AdaptiveArrayPools.jl)
-        # Eliminates intermediate allocations during Flux.Chain evaluation
-        yy = fluxmodel._pooled_chain(xx)
+    # Forward pass through neural network (zero allocation via pooled layers)
+    fluxmodel._pooled_chain(out_y, xx)
 
     if fidelity == :GKNN
-        return yy
+        return out_y
     elseif fidelity == :TGLFNN
-        # Denormalize output: yy * yσ + ym
-        nouts = size(yy, 1)
+        # Denormalize outputs: out_y * yσ + ym
+        nouts = size(out_y, 1)
         @inbounds for i in 1:nouts
             ym_i = fluxmodel.ym[i]
             yσ_i = fluxmodel.yσ[i]
             for j in 1:M
-                yy[i, j] = yy[i, j] * yσ_i + ym_i
+                out_y[i, j] = out_y[i, j] * yσ_i + ym_i
             end
         end
-        return yy
+        return out_y
     else
         error("Unknown fidelity mode: $fidelity. Expected :GKNN or :TGLFNN")
     end
 end
 
-"""
-    flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; ...) where {T<:Real}
 
-Single-sample inference: processes one vector through the model.
 """
-function flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN, xx::AbstractVector{T}=similar(x)) where {T<:Real}
+    flux_array!(out_y::AbstractVector{T}, fluxmodel::TGLFNNmodel, x::AbstractVector{T};
+                warn_nn_train_bounds=true, fidelity=:TGLFNN) where {T<:Real}
+
+In-place single-sample inference with **zero allocation** (requires AdaptiveArrayPools.jl v0.2.1+).
+
+Processes one input vector through the model and writes results to `out_y`.
+
+# Arguments
+- `out_y::AbstractVector{T}`: Pre-allocated output vector `[N_outputs]`
+- `fluxmodel::TGLFNNmodel`: Neural network model
+- `x::AbstractVector{T}`: Input features `[N_features]`
+- `warn_nn_train_bounds::Bool=true`: Warn if extrapolating beyond training bounds
+- `fidelity::Symbol=:TGLFNN`: Output mode (`:TGLFNN` for denormalized, `:GKNN` for normalized)
+
+# Performance
+Uses `unsafe_acquire!` from AdaptiveArrayPools.jl for zero-allocation scratch space.
+After warmup, this function allocates **0 bytes**.
+"""
+@with_pool pool function flux_array!(out_y::AbstractVector{T}, fluxmodel::TGLFNNmodel, x::AbstractVector{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
     N = length(x)
 
+    # Acquire scratch vector from pool (zero allocation after warmup)
+    xx = unsafe_acquire!(pool, T, N)
+
+    # Apply log10 transform where needed (determined by feature name)
     for (ix, name) in enumerate(fluxmodel.xnames)
         xx[ix] = contains(name, "_log10") ? log10(x[ix]) : x[ix]
     end
 
+    # Validate bounds
     if warn_nn_train_bounds
         for ix in 1:N
             if isnan(xx[ix]) || isinf(xx[ix])
@@ -268,17 +324,18 @@ function flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; warn_nn_train_
         end
     end
 
+    # Normalize inputs: (xx - mean) / std
     @. xx = (xx - fluxmodel.xm) / fluxmodel.xσ
 
-    # Forward pass via PooledChain (backed by AdaptiveArrayPools.jl)
-    # Eliminates intermediate allocations during Flux.Chain evaluation
-        yy = fluxmodel._pooled_chain(xx)
+    # Forward pass through neural network (zero allocation via pooled layers)
+    fluxmodel._pooled_chain(out_y, xx)
 
     if fidelity == :GKNN
-        return yy
+        return out_y
     elseif fidelity == :TGLFNN
-        @. yy = yy * fluxmodel.yσ + fluxmodel.ym
-        return yy
+        # Denormalize outputs: out_y * yσ + ym
+        @. out_y = out_y * fluxmodel.yσ + fluxmodel.ym
+        return out_y
     else
         error("Unknown fidelity mode: $fidelity. Expected :GKNN or :TGLFNN")
     end
