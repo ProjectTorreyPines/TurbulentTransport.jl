@@ -69,6 +69,70 @@ function Base.getproperty(ensemble::TGLFNNensemble, field::Symbol)
 end
 
 #= ====================================== =#
+#  Zero-allocation field extraction cache
+#= ====================================== =#
+
+# External cache for field symbols Val types (avoids Any field in struct)
+const _XNAMES_FIELD_SYMBOLS_CACHE = Dict{UInt64, Any}()
+
+"""
+    _get_xnames_without_log10_suffix(model::TGLFNNmodel)
+
+Get cached `Val{Tuple{Symbol...}}` of InputTGLF field names from model's xnames.
+Strips `_log10` suffix: `"BETAE_log10"` → `:BETAE`
+
+Uses external cache to avoid type instability from storing in struct.
+Used by `_extract_fields!` for zero-allocation field extraction.
+"""
+function _get_xnames_without_log10_suffix(model::TGLFNNmodel)
+    key = objectid(model.xnames)
+    get!(_XNAMES_FIELD_SYMBOLS_CACHE, key) do
+        symbols = Tuple(Symbol(endswith(x, log_suffix) ? x[1:end-n_log_suffix] : x) for x in model.xnames)
+        Val(symbols)
+    end
+end
+
+function _get_xnames_without_log10_suffix(ensemble::TGLFNNensemble)
+    _get_xnames_without_log10_suffix(ensemble.models[1])
+end
+
+"""
+    _extract_fields!(inputs::AbstractVector, obj, ::Val{symbols}, index::Int=0) where {symbols}
+
+Zero-allocation field extraction with `ismissing` validation.
+`symbols` is a tuple of field names (Symbols) known at compile time.
+`index` is the radial location index for error messages (default 0 for single InputTGLF).
+
+This function is `@generated` to unroll field access at compile time,
+avoiding the boxing overhead of dynamic `getfield(obj, runtime_symbol)`.
+The `ismissing` check adds negligible overhead due to branch prediction.
+"""
+@generated function _extract_fields!(inputs::AbstractVector, obj, ::Val{symbols}, index::Int=0) where {symbols}
+    exprs = []
+    for (i, s) in enumerate(symbols)
+        push!(exprs, quote
+            let value = getfield(obj, $(QuoteNode(s)))
+                if ismissing(value)
+                    _throw_missing_field_error($(QuoteNode(s)), index)
+                end
+                @inbounds inputs[$i] = value
+            end
+        end)
+    end
+    return Expr(:block, exprs..., :inputs)
+end
+
+# Error function separated for hot path optimization (@noinline keeps it out of inlined code)
+@noinline function _throw_missing_field_error(field::Symbol, index::Int)
+    field_str = string(field)
+    hint = ""
+    if occursin("_5", field_str) || occursin("_6", field_str)
+        hint = "\n\nHint: Missing species data (species 5 or 6). If using a TGLFNN model (e.g. 'stfpp' models), try setting:\n  act.ActorTGLF.lump_ions = false\nto ensure ion species are treated separately rather than lumped together."
+    end
+    error("TGLFNN input field '$field_str' is Missing at radial location $index. Check that all required equilibrium and profile data are properly initialized.$hint")
+end
+
+#= ====================================== =#
 #  Pooled layer convenience methods
 #= ====================================== =#
 
@@ -492,10 +556,11 @@ function run_tglfnn(input_tglf::InputTGLF{T}; model_filename::String, uncertain:
         tglfmod = loadmodelonce(model_filename)
     end
     inputs = zeros(length(tglfmod.xnames))
-    for (k, item) in enumerate(tglfmod.xnames)
-        item = replace(item, "_log10" => "")
-        inputs[k] = getfield(input_tglf, Symbol(item))
-    end
+
+    # Extract input fields using @generated function for zero-allocation
+    xnames_val = _get_xnames_without_log10_suffix(tglfmod)
+    _extract_fields!(inputs, input_tglf, xnames_val)
+
     sol = tglfmod(inputs...; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
     if fidelity == :GKNN
         supported_gknn_models = ["sat3_em_d3d_azf-1", "sat3_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d_azf-1_withnegD", "sat3_em_d3d_azf-1_gkdb", "sat2_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d+mastu_azf-1"]
@@ -580,24 +645,13 @@ function run_tglfnn(input_tglfs::Vector{InputTGLF{T}}; model_filename::String, u
         tglfmod = loadmodelonce(model_filename)
     end
     inputs = zeros(T, length(tglfmod.xnames), length(input_tglfs))
+
+    # Extract input fields using @generated function for zero-allocation
+    xnames_val = _get_xnames_without_log10_suffix(tglfmod)
     for (i, input_tglf) in enumerate(input_tglfs)
-        for (k, item) in enumerate(tglfmod.xnames)
-            if endswith(item, log_suffix)
-                subitem = SubString(item, firstindex(item), prevind(item, lastindex(item), n_log_suffix))
-                value = getfield(input_tglf, Symbol(subitem))
-            else
-                value = getfield(input_tglf, Symbol(item))
-            end
-            if ismissing(value)
-                hint = ""
-                if occursin("_5", item) || occursin("_6", item)
-                    hint = "\n\nHint: Missing species data (species 5). If using a TGLFNN model (e.g. 'stfpp' models), try setting:\n  act.ActorTGLF.lump_ions = false\nto ensure ion species are treated separately rather than lumped together."
-                end
-                error("TGLFNN input field '$(item)' is Missing at radial location $(i). Check that all required equilibrium and profile data are properly initialized.$(hint)")
-            end
-            inputs[k, i] = value
-        end
+        _extract_fields!(@view(inputs[:, i]), input_tglf, xnames_val)
     end
+
     tmp = flux_array(tglfmod, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
     if fidelity == :GKNN
         supported_gknn_models = ["sat3_em_d3d_azf-1", "sat3_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d_azf-1_withnegD", "sat3_em_d3d_azf-1_gkdb", "sat2_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d+mastu_azf-1"]
