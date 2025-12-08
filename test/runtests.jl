@@ -19,14 +19,12 @@ if !isempty(ARGS)
         include(testfile)
     end
 else
-    @testset "TurbulentTransport.jl" begin
-        include("test_load.jl")
-        include("test_presets.jl")
-        include("test_models.jl")
-        include("test_flux_array.jl")
-        include("test_run_tglfnn.jl")
-        include("test_utils.jl")
-        include("test_input_tglfs.jl")
-        include("test_bufferize.jl")
-    end
+    include("test_load.jl")
+    include("test_presets.jl")
+    include("test_models.jl")
+    include("test_flux_array.jl")
+    include("test_run_tglfnn.jl")
+    include("test_utils.jl")
+    include("test_input_tglfs.jl")
+    include("test_bufferize.jl")
 end
