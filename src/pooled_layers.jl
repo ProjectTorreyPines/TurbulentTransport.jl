@@ -231,15 +231,16 @@ end
 #  Global Cache for Pooled Models
 #= ====================================== =#
 
-# Cache mapping: Original Flux Chain (by object identity) -> PooledModel
-# Uses IdDict for O(1) lookup, ensuring loadmodelonce-cached models hit correctly.
+# IdDict: O(1) lookup by object identity
+# Note: WeakKeyDict cannot be used because Flux.Chain is immutable (no finalizer support)
+# Memory bounded by number of unique loaded models (typically 1-5 via loadmodelonce)
 const _pooled_cache = IdDict{Any,PooledModel}()
+const _cache_lock = ReentrantLock()
 
 """
     get_pooled_model(chain) -> PooledModel
 
-Retrieve or create a cached `PooledModel` for the given Flux chain.
-First call creates and caches the pooled version; subsequent calls return cached.
+Thread-safe cache for PooledModels.
 
 # Example
 ```julia
@@ -248,7 +249,9 @@ y = pm(x)  # zero-allocation after warmup
 ```
 """
 function get_pooled_model(chain)
-    return get!(_pooled_cache, chain) do
-        PooledModel(poolify(chain))
+    lock(_cache_lock) do
+        return get!(_pooled_cache, chain) do
+            PooledModel(poolify(chain))
+        end
     end
 end
