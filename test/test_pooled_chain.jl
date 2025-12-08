@@ -1,7 +1,7 @@
-# Test PooledModel with AdaptiveArrayPools
-using TurbulentTransport: poolify, PooledModel, PooledDense, PooledActivation, PooledParallelAdd
+# Test PooledChain with AdaptiveArrayPools
+using TurbulentTransport: poolify, PooledChain, PooledDense, PooledActivation, PooledParallelAdd
 
-@testset "PooledModel" begin
+@testset "PooledChain" begin
     # Sample models to test
     TEST_MODELS = [
         "sat0_em_d3d",
@@ -9,13 +9,13 @@ using TurbulentTransport: poolify, PooledModel, PooledDense, PooledActivation, P
         "sat3_em_d3d_azf-1",
     ]
 
-    @testset "PooledModel correctness" begin
+    @testset "PooledChain correctness" begin
         @testset "Model: $model_name" for model_name in TEST_MODELS
             ensemble = loadmodel(model_name)
             model = ensemble.models[1]
 
-            # Create PooledModel (auto-managed pool)
-            pm = PooledModel(poolify(model.fluxmodel))
+            # Create PooledChain (auto-managed pool)
+            pm = PooledChain(poolify(model.fluxmodel))
 
             # Generate valid test input
             x_vec = generate_valid_input(model)
@@ -41,10 +41,10 @@ using TurbulentTransport: poolify, PooledModel, PooledDense, PooledActivation, P
         end
     end
 
-    @testset "PooledModel with varying batch sizes" begin
+    @testset "PooledChain with varying batch sizes" begin
         ensemble = loadmodel("sat2_em_d3d_azf-1")
         model = ensemble.models[1]
-        pm = PooledModel(poolify(model.fluxmodel))
+        pm = PooledChain(poolify(model.fluxmodel))
 
         # No max_batch limit - works with any size
         @testset "Batch size: $batch_size" for batch_size in [1, 5, 10, 50, 100, 500]
@@ -58,10 +58,10 @@ using TurbulentTransport: poolify, PooledModel, PooledDense, PooledActivation, P
         end
     end
 
-    @testset "PooledModel multiple sequential calls" begin
+    @testset "PooledChain multiple sequential calls" begin
         ensemble = loadmodel("sat2_em_d3d_azf-1")
         model = ensemble.models[1]
-        pm = PooledModel(poolify(model.fluxmodel))
+        pm = PooledChain(poolify(model.fluxmodel))
 
         x1 = generate_valid_input_matrix(model, 10)
         x2 = generate_valid_input_matrix(model, 20)
@@ -83,12 +83,12 @@ using TurbulentTransport: poolify, PooledModel, PooledDense, PooledActivation, P
         @test r3 == model.fluxmodel(x3)
     end
 
-    @testset "PooledModel convenience constructor" begin
+    @testset "PooledChain convenience constructor" begin
         ensemble = loadmodel("sat2_em_d3d_azf-1")
         model = ensemble.models[1]
 
         # Direct from TGLFNNmodel
-        pm = PooledModel(model)
+        pm = PooledChain(model)
 
         x = generate_valid_input_matrix(model, 10)
         y_orig = model.fluxmodel(x)
@@ -97,13 +97,13 @@ using TurbulentTransport: poolify, PooledModel, PooledDense, PooledActivation, P
         @test y_orig == y_pooled
     end
 
-    @testset "PooledModel minimal allocation (output only)" begin
+    @testset "PooledChain minimal allocation (output only)" begin
         # After warmup, only the output array is allocated (via collect).
         # Pool intermediates are reused — no GC pressure from intermediate layers.
         # Julia's array allocation costs ~2 allocations + output_size bytes + overhead.
         ensemble = loadmodel("sat2_em_d3d_azf-1")
         model = ensemble.models[1]
-        pm = PooledModel(model)
+        pm = PooledChain(model)
         nouts = length(model.ynames)
 
         # Test with various batch sizes
@@ -134,10 +134,10 @@ using TurbulentTransport: poolify, PooledModel, PooledDense, PooledActivation, P
         end
     end
 
-    @testset "PooledModel in-place: pm(out, x) zero allocation" begin
+    @testset "PooledChain in-place: pm(out, x) zero allocation" begin
         ensemble = loadmodel("sat2_em_d3d_azf-1")
         model = ensemble.models[1]
-        pm = PooledModel(model)
+        pm = PooledChain(model)
         nouts = length(model.ynames)
         nins = length(model.xnames)
 
@@ -308,7 +308,7 @@ using TurbulentTransport: poolify, PooledModel, PooledDense, PooledActivation, P
     @testset "PooledParallelAdd for ResNet blocks" begin
         ensemble = loadmodel("sat2_em_d3d_azf-1")
         model = ensemble.models[1]
-        pm = PooledModel(poolify(model.fluxmodel))
+        pm = PooledChain(poolify(model.fluxmodel))
 
         # Count PooledParallelAdd instances (should be 5 for this model)
         function count_parallel_add(layer, count=Ref(0))
@@ -332,7 +332,7 @@ using TurbulentTransport: poolify, PooledModel, PooledDense, PooledActivation, P
         @test y_orig == y_pooled
     end
 
-    @testset "PooledModel all available models" begin
+    @testset "PooledChain all available models" begin
         all_models = available_models()
 
         # Filter to .bson files only (skip directories/symlinks for speed)
@@ -350,7 +350,7 @@ using TurbulentTransport: poolify, PooledModel, PooledDense, PooledActivation, P
             end
 
             model = ensemble.models[1]
-            pm = PooledModel(model)
+            pm = PooledChain(model)
 
             x = generate_valid_input(model)
             y_orig = model.fluxmodel(x)

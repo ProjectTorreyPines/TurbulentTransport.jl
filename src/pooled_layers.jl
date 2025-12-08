@@ -6,7 +6,7 @@
 # Uses AdaptiveArrayPools.jl for thread-safe, zero-allocation (after warmup) inference.
 #
 # Usage (simple - auto pool management):
-#   model = PooledModel(poolify(flux_chain))
+#   model = PooledChain(poolify(flux_chain))
 #   result = model(x)  # just call it!
 #
 # Usage (explicit - fine-grained control):
@@ -184,18 +184,18 @@ end
 # Note: poolify(model::TGLFNNmodel) is defined in tglf_nn.jl to avoid circular dependency
 
 #= ====================================== =#
-#  PooledModel (Auto-managed pool wrapper)
+#  PooledChain (Auto-managed pool wrapper)
 #= ====================================== =#
 
 """
-    PooledModel{M<:Flux.Chain}
+    PooledChain{M<:Flux.Chain}
 
 Wrapper that automatically manages `@with_pool` on each call.
 Use this when you want a simple callable interface without explicit pool management.
 
 # Usage
 ```julia
-model = PooledModel(poolify(flux_chain))
+model = PooledChain(poolify(flux_chain))
 
 # Allocating version - returns owned Array
 y = model(x)
@@ -211,26 +211,26 @@ model(y, x)  # writes result to y
 - Pool intermediates are reused across calls
 - Type parameter `M` preserves concrete Chain type for zero-allocation dispatch
 """
-struct PooledModel{M<:Flux.Chain}
+struct PooledChain{M<:Flux.Chain}
     model::M
 end
 
 # Allocating versions (return owned Array via collect)
-@with_pool function (pm::PooledModel)(x::AbstractMatrix)
+@with_pool function (pm::PooledChain)(x::AbstractMatrix)
     return collect(pm.model(x))::Matrix{Float64}
 end
 
-@with_pool function (pm::PooledModel)(x::AbstractVector)
+@with_pool function (pm::PooledChain)(x::AbstractVector)
     return collect(pm.model(x))::Vector{Float64}
 end
 
 # In-place versions: pm(output, input) following Julia convention (mutated arg first)
-@with_pool function (pm::PooledModel)(out::AbstractMatrix, x::AbstractMatrix)
+@with_pool function (pm::PooledChain)(out::AbstractMatrix, x::AbstractMatrix)
     copyto!(out, pm.model(x))
     return out
 end
 
-@with_pool function (pm::PooledModel)(out::AbstractVector, x::AbstractVector)
+@with_pool function (pm::PooledChain)(out::AbstractVector, x::AbstractVector)
     copyto!(out, pm.model(x))
     return out
 end

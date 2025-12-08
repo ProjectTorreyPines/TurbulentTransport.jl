@@ -30,8 +30,8 @@ struct TGLFNNmodel <: TGLFmodel
     ybounds::Array{Float64}
     nions::Int
 
-    # Pre-initialized PooledModel for zero-allocation inference (not serialized)
-    _pooled_fluxmodel::PooledModel
+    # Pre-initialized PooledChain for zero-allocation inference (not serialized)
+    _pooled_chain::PooledChain
 end
 
 function Base.show(io::IO, mime::MIME"text/plain", model::TGLFNNmodel)
@@ -80,11 +80,11 @@ Convert a TGLFNNmodel's fluxmodel to use pooled layers.
 poolify(model::TGLFNNmodel) = poolify(model.fluxmodel)
 
 """
-    PooledModel(model::TGLFNNmodel)
+    PooledChain(model::TGLFNNmodel)
 
-Convenience constructor: creates a PooledModel from a TGLFNNmodel.
+Convenience constructor: creates a PooledChain from a TGLFNNmodel.
 """
-PooledModel(model::TGLFNNmodel) = PooledModel(poolify(model.fluxmodel))
+PooledChain(model::TGLFNNmodel) = PooledChain(poolify(model.fluxmodel))
 
 #= ============== =#
 #  saving/loading  #
@@ -92,7 +92,7 @@ PooledModel(model::TGLFNNmodel) = PooledModel(poolify(model.fluxmodel))
 function mod2dict(model::TGLFNNmodel)
     savedict = Dict()
     for name in fieldnames(TGLFNNmodel)
-        name === :_pooled_fluxmodel && continue  # Skip cache field (not serialized)
+        name === :_pooled_chain && continue  # Skip cache field (not serialized)
         value = getproperty(model, name)
         savedict[name] = value
     end
@@ -133,8 +133,8 @@ function dict2mod(savedict::AbstractDict)
         elseif name == :nions
             nions = maximum(map(m -> parse(Int, m[1]), filter(!isnothing, match.(r"_([0-9]+$)", savedict[:xnames])))) - 1
             push!(args, nions)
-        elseif name === :_pooled_fluxmodel
-            push!(args, PooledModel(poolify(savedict[:fluxmodel])))
+        elseif name === :_pooled_chain
+            push!(args, PooledChain(poolify(savedict[:fluxmodel])))
         else
             push!(args, savedict[name])
         end
@@ -222,9 +222,9 @@ function flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; warn_nn_train_
         end
     end
 
-    # Forward pass via PooledModel (backed by AdaptiveArrayPools.jl)
+    # Forward pass via PooledChain (backed by AdaptiveArrayPools.jl)
         # Eliminates intermediate allocations during Flux.Chain evaluation
-        yy = fluxmodel._pooled_fluxmodel(xx)
+        yy = fluxmodel._pooled_chain(xx)
 
     if fidelity == :GKNN
         return yy
@@ -270,9 +270,9 @@ function flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; warn_nn_train_
 
     @. xx = (xx - fluxmodel.xm) / fluxmodel.xσ
 
-    # Forward pass via PooledModel (backed by AdaptiveArrayPools.jl)
+    # Forward pass via PooledChain (backed by AdaptiveArrayPools.jl)
     # Eliminates intermediate allocations during Flux.Chain evaluation
-        yy = fluxmodel._pooled_fluxmodel(xx)
+        yy = fluxmodel._pooled_chain(xx)
 
     if fidelity == :GKNN
         return yy
