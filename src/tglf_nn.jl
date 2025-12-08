@@ -72,7 +72,7 @@ end
 #  Zero-allocation field extraction cache
 #= ====================================== =#
 
-# External cache for field symbols Val types (avoids Any field in struct)
+# Cache for field symbols Val types (Any because each model has different Val{Tuple} type)
 const _XNAMES_FIELD_SYMBOLS_CACHE = Dict{UInt64, Any}()
 
 """
@@ -80,9 +80,6 @@ const _XNAMES_FIELD_SYMBOLS_CACHE = Dict{UInt64, Any}()
 
 Get cached `Val{Tuple{Symbol...}}` of InputTGLF field names from model's xnames.
 Strips `_log10` suffix: `"BETAE_log10"` → `:BETAE`
-
-Uses external cache to avoid type instability from storing in struct.
-Used by `_extract_fields!` for zero-allocation field extraction.
 """
 function _get_xnames_without_log10_suffix(model::TGLFNNmodel)
     key = objectid(model.xnames)
@@ -97,15 +94,11 @@ function _get_xnames_without_log10_suffix(ensemble::TGLFNNensemble)
 end
 
 """
-    _extract_fields!(inputs::AbstractVector, obj, ::Val{symbols}, index::Int=0) where {symbols}
+    _extract_fields!(inputs::AbstractVector, obj, ::Val{symbols}, index::Int=0)
 
-Zero-allocation field extraction with `ismissing` validation.
-`symbols` is a tuple of field names (Symbols) known at compile time.
-`index` is the radial location index for error messages (default 0 for single InputTGLF).
-
-This function is `@generated` to unroll field access at compile time,
-avoiding the boxing overhead of dynamic `getfield(obj, runtime_symbol)`.
-The `ismissing` check adds negligible overhead due to branch prediction.
+Zero-allocation field extraction using compile-time unrolled field access.
+`symbols` is a tuple of field names known at compile time via `Val`.
+`index` is the radial location index for error messages (default 0).
 """
 @generated function _extract_fields!(inputs::AbstractVector, obj, ::Val{symbols}, index::Int=0) where {symbols}
     exprs = []
@@ -120,6 +113,14 @@ The `ismissing` check adds negligible overhead due to branch prediction.
         end)
     end
     return Expr(:block, exprs..., :inputs)
+end
+
+# Function barrier: specializes on concrete Val type, avoiding dynamic dispatch in loop
+function _extract_all_inputs!(inputs::AbstractMatrix, input_tglfs::Vector{InputTGLF{T}}, xnames_val::Val) where {T<:Real}
+    for (i, input_tglf) in enumerate(input_tglfs)
+        _extract_fields!(@view(inputs[:, i]), input_tglf, xnames_val, i)
+    end
+    return inputs
 end
 
 # Error function separated for hot path optimization (@noinline keeps it out of inlined code)
@@ -576,9 +577,7 @@ Returns a vector of `flux_solution` structures
 
     # Extract input fields using @generated function for zero-allocation
     xnames_val = _get_xnames_without_log10_suffix(tglfmod)
-    for (i, input_tglf) in enumerate(input_tglfs)
-        _extract_fields!(@view(inputs[:, i]), input_tglf, xnames_val)
-    end
+    _extract_all_inputs!(inputs, input_tglfs, xnames_val)  
 
     tmp = flux_array(tglfmod, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
     if fidelity == :GKNN
