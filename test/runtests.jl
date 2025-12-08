@@ -25,5 +25,5 @@ else
     include("test_run_tglfnn.jl")
     include("test_utils.jl")
     include("test_input_tglfs.jl")
-    include("test_pooled_model.jl")
+    include("test_pooled_chain.jl")
 end

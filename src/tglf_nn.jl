@@ -181,7 +181,12 @@ end
 Batched inference: processes entire `[N_features, M_samples]` matrix in single forward pass.
 """
 function flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
-    yy = Matrix{T}(undef, length(fluxmodel.ynames), size(x, 2))
+    nouts = length(fluxmodel.ynames)
+    if fidelity == :GKNN
+        nouts = div(nouts, 2)
+    end
+    yy = Matrix{T}(undef, nouts, size(x, 2))
+
     flux_array!(yy, fluxmodel, x; warn_nn_train_bounds, fidelity)
     return yy
 end
@@ -192,7 +197,11 @@ end
 Single-sample inference: processes one vector through the model.
 """
 function flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN, xx::AbstractVector{T}=similar(x)) where {T<:Real}
-    yy = Vector{T}(undef, length(fluxmodel.ynames))
+    nouts = length(fluxmodel.ynames)
+    if fidelity == :GKNN
+        nouts = div(nouts, 2)
+    end
+    yy = Vector{T}(undef, nouts)
     flux_array!(yy, fluxmodel, x; warn_nn_train_bounds, fidelity)
     return yy
 end

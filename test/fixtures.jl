@@ -80,10 +80,6 @@ end
 # flux_array expected outputs for sat0_em_d3d single model (first model in ensemble)
 const EXPECTED_FLUX_ARRAY_SINGLE = [0.021994637644215054, 0.14526707591951704, 0.4718316916684522, 0.4132556522695987]
 
-# flux_array expected outputs for sat0_em_d3d single model with fidelity=:GKNN
-# Note: This is a TGLF-NN model, so fidelity=:GKNN just skips denormalization (raw NN output)
-const EXPECTED_FLUX_ARRAY_SINGLE_RAW = [-0.23004951851133254, -0.21326135534711577, -0.31156058557178723, -0.32071940967901724]
-
 # GKNN correction model (sat3_em_d3d_azf-1_gknne24) expected outputs
 # These models have ynames of length 2, and fidelity=:GKNN outputs div(ynames, 2) = 1 value
 const EXPECTED_GKNN_MODEL_SINGLE = [0.93651175002966]
