@@ -181,14 +181,7 @@ function poolify(layer)
     end
 end
 
-"""
-    poolify(model::TGLFNNmodel)
-
-Convert a TGLFNNmodel's fluxmodel to use pooled layers.
-"""
-function poolify(model::TGLFNNmodel)
-    poolify(model.fluxmodel)
-end
+# Note: poolify(model::TGLFNNmodel) is defined in tglf_nn.jl to avoid circular dependency
 
 #= ====================================== =#
 #  PooledModel (Auto-managed pool wrapper)
@@ -223,5 +216,30 @@ function (pm::PooledModel)(x)
     @with_pool _pool pm.model(x)
 end
 
-# Convenience constructor
-PooledModel(model::TGLFNNmodel) = PooledModel(poolify(model.fluxmodel))
+# Note: PooledModel(model::TGLFNNmodel) convenience constructor is in tglf_nn.jl
+
+#= ====================================== =#
+#  Global Cache for Pooled Models
+#= ====================================== =#
+
+# Cache mapping: Original Flux Chain (by object identity) -> PooledModel
+# Uses IdDict for O(1) lookup, ensuring loadmodelonce-cached models hit correctly.
+const _pooled_cache = IdDict{Any,PooledModel}()
+
+"""
+    get_pooled_model(chain) -> PooledModel
+
+Retrieve or create a cached `PooledModel` for the given Flux chain.
+First call creates and caches the pooled version; subsequent calls return cached.
+
+# Example
+```julia
+pm = get_pooled_model(model.fluxmodel)
+y = pm(x)  # zero-allocation after warmup
+```
+"""
+function get_pooled_model(chain)
+    return get!(_pooled_cache, chain) do
+        PooledModel(poolify(chain))
+    end
+end

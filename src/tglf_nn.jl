@@ -65,6 +65,24 @@ function Base.getproperty(ensemble::TGLFNNensemble, field::Symbol)
     end
 end
 
+#= ====================================== =#
+#  Pooled layer convenience methods
+#= ====================================== =#
+
+"""
+    poolify(model::TGLFNNmodel)
+
+Convert a TGLFNNmodel's fluxmodel to use pooled layers.
+"""
+poolify(model::TGLFNNmodel) = poolify(model.fluxmodel)
+
+"""
+    PooledModel(model::TGLFNNmodel)
+
+Convenience constructor: creates a PooledModel from a TGLFNNmodel.
+"""
+PooledModel(model::TGLFNNmodel) = PooledModel(poolify(model.fluxmodel))
+
 #= ============== =#
 #  saving/loading  #
 #= ============== =#
@@ -198,8 +216,9 @@ function flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; warn_nn_train_
         end
     end
 
-    # Single forward pass through the entire batch
-    yy = fluxmodel.fluxmodel(xx)::Matrix{Float64}
+    # Single forward pass through the entire batch (pool reused for intermediates)
+    pm = get_pooled_model(fluxmodel.fluxmodel)
+    yy = collect(pm(xx))::Matrix{Float64}  # collect() for safe return value
 
     if fidelity == :GKNN
         return yy
@@ -244,7 +263,8 @@ function flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; warn_nn_train_
     end
 
     @. xx = (xx - fluxmodel.xm) / fluxmodel.xσ
-    yy = fluxmodel.fluxmodel(xx)::Vector{Float64}
+    pm = get_pooled_model(fluxmodel.fluxmodel)
+    yy = collect(pm(xx))::Vector{Float64}  # collect() for safe return value
 
     if fidelity == :GKNN
         return yy
