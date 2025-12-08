@@ -20,7 +20,10 @@ include("qlgyro.jl")
 
 include("utils.jl")
 
+include("buffered_layers.jl")
+
 export InputTGLF, InputTJLF
+export bufferize, BufferedDense, BufferedActivation
 
 const document = Dict()
 document[Symbol(@__MODULE__)] = [name for name in Base.names(@__MODULE__; all=false, imported=false) if name != Symbol(@__MODULE__)]

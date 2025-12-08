@@ -6,6 +6,7 @@ version = "1.0.14"
 
 [deps]
 BSON = "fbb218c0-5317-5bc6-957e-2ee96dd4b1f0"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 Flux = "587475ba-b771-5e3f-ad9e-33799f191a9c"
 GACODE = "bb074124-7a58-47ce-bd41-6b7098184f23"
