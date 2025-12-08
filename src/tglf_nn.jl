@@ -223,7 +223,11 @@ function flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; warn_nn_train_
     end
 
     # Single forward pass through the entire batch (pool reused for intermediates)
-    yy = fluxmodel._pooled_fluxmodel(xx)
+    if fluxmodel._pooled_fluxmodel === nothing
+        yy = fluxmodel.fluxmodel(xx)::Matrix{Float64}
+    else
+        yy = fluxmodel._pooled_fluxmodel(xx)
+    end
 
     if fidelity == :GKNN
         return yy
@@ -269,8 +273,11 @@ function flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; warn_nn_train_
 
     @. xx = (xx - fluxmodel.xm) / fluxmodel.xσ
 
-    # Single forward pass through the entire batch (pool reused for intermediates)
-    yy = fluxmodel._pooled_fluxmodel(xx)
+    if fluxmodel._pooled_fluxmodel === nothing
+        yy = fluxmodel.fluxmodel(xx)::Vector{Float64}
+    else
+        yy = fluxmodel._pooled_fluxmodel(xx)
+    end
 
     if fidelity == :GKNN
         return yy
