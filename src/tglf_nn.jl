@@ -640,7 +640,7 @@ function run_tglfnn(data::Dict; model_filename::String, uncertain::Bool=false, w
     if occursin("stfpp", model_filename)
         _apply_stfpp_transform!(data; dtf=0.5, device="")
     end
-    if model_filename in ("sat3_em_d3d_azf-1",) && fidelity == :GKNN
+    if model_filename == "sat3_em_d3d_azf-1" && fidelity == :GKNN
         tglfmod = loadmodelonce(model_filename * "_tglfnn24")
     else
         tglfmod = loadmodelonce(model_filename)
@@ -653,7 +653,7 @@ function run_tglfnn(data::Dict; model_filename::String, uncertain::Bool=false, w
         if !(model_filename in supported_gknn_models)
             error("GKNN fidelity is not supported for model '$model_filename'. Supported models are: $(join(supported_gknn_models, ", "))")
         end
-        if model_filename in ("sat3_em_d3d_azf-1",)
+        if model_filename == "sat3_em_d3d_azf-1"
             gknng = loadmodelonce(model_filename * "_gknng24")
             err_g = gknng(vcat(x, y[1])...; uncertain, warn_nn_train_bounds, fidelity)
             y[1] .*= err_g
@@ -670,12 +670,12 @@ function run_tglfnn(data::Dict; model_filename::String, uncertain::Bool=false, w
             gknn = loadmodelonce(model_filename * "_gknn31")
             err = gknn(vcat(x, y)...; uncertain, warn_nn_train_bounds, fidelity)
             y .*= err
-            if model_filename in ("sat3_em_d3d_azf-1_gkdb",)
+            if model_filename == "sat3_em_d3d_azf-1_gkdb"
                 gkdb = loadmodelonce(model_filename * "_gknn31_cgyro")
                 gkdb_err = gkdb(vcat(x, y)...; uncertain, warn_nn_train_bounds, fidelity)
                 y .*= gkdb_err
             end
-        elseif model_filename in ["sat3_em_d3d+mastu_azf-1"]
+        elseif model_filename == "sat3_em_d3d+mastu_azf-1"
             gknn = loadmodelonce(model_filename * "_gknn36")
             err = gknn(vcat(x, y)...; uncertain, warn_nn_train_bounds, fidelity)
             y .*= err
