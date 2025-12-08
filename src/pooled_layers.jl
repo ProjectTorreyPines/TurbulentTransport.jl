@@ -193,28 +193,37 @@ end
 Wrapper that automatically manages `@with_pool` on each call.
 Use this when you want a simple callable interface without explicit pool management.
 
+Returns an owned `Array` (via `collect`), not a pool view. This is necessary because
+pool memory is rewound after `@with_pool` exits — returning a `SubArray` view would
+point to "free" memory that may be overwritten by subsequent pool operations.
+
 # Example
 ```julia
 # Create auto-managed pooled model
 model = PooledModel(poolify(flux_chain))
 
 # Just call it - no @with_pool needed!
-y = model(x)
+y = model(x)  # returns Array, safe to use after call
 ```
 
 # Notes
-- Each call does: checkpoint → run → rewind (pool memory reused across calls)
+- Each call does: checkpoint → run → collect → rewind
+- The `collect` copies the result before pool rewind (only allocation after warmup)
 - Thread-safe via task-local storage
-- After warmup, zero allocation for same-sized inputs
-- Equivalent to `@with_pool pool model(x)` but cleaner syntax
+- Pool intermediates are zero-allocation after warmup
 """
 struct PooledModel{M}
     model::M
 end
 
-function (pm::PooledModel)(x)
-    @with_pool _pool pm.model(x)
+@with_pool function (pm::PooledModel)(x::AbstractMatrix)
+    return collect(pm.model(x))::Matrix{Float64}
 end
+
+@with_pool function (pm::PooledModel)(x::AbstractVector)
+    return collect(pm.model(x))::Vector{Float64}
+end
+
 
 # Note: PooledModel(model::TGLFNNmodel) convenience constructor is in tglf_nn.jl
 
