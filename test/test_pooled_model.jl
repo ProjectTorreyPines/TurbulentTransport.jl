@@ -134,6 +134,164 @@ using TurbulentTransport: poolify, PooledModel, PooledDense, PooledActivation, P
         end
     end
 
+    @testset "PooledModel in-place: pm(out, x) zero allocation" begin
+        ensemble = loadmodel("sat2_em_d3d_azf-1")
+        model = ensemble.models[1]
+        pm = PooledModel(model)
+        nouts = length(model.ynames)
+        nins = length(model.xnames)
+
+        # Matrix version
+        @testset "Matrix in-place" begin
+            batch_size = 10
+            x = generate_valid_input_matrix(model, batch_size)
+            out = Matrix{Float64}(undef, nouts, batch_size)
+
+            # Warmup
+            pm(out, x)
+
+            # Verify correctness
+            y_alloc = pm(x)
+            @test out == y_alloc
+
+            # Zero allocation after warmup
+            allocs = @allocated pm(out, x)
+            @test allocs == 0
+        end
+
+        # Vector version
+        @testset "Vector in-place" begin
+            x_vec = generate_valid_input(model)
+            out_vec = Vector{Float64}(undef, nouts)
+
+            # Warmup
+            pm(out_vec, x_vec)
+
+            # Verify correctness
+            y_alloc = pm(x_vec)
+            @test out_vec == y_alloc
+
+            # Zero allocation after warmup
+            allocs = @allocated pm(out_vec, x_vec)
+            @test allocs == 0
+        end
+
+        # View as output (Matrix)
+        @testset "Matrix view as output" begin
+            batch_size = 10
+            x = generate_valid_input_matrix(model, batch_size)
+
+            # Output view into larger buffer
+            buffer = Matrix{Float64}(undef, nouts + 2, batch_size + 2)
+            out_view = @view buffer[2:nouts+1, 2:batch_size+1]
+
+            # Warmup
+            pm(out_view, x)
+
+            # Verify correctness
+            y_alloc = pm(x)
+            @test out_view == y_alloc
+
+            # Zero allocation after warmup
+            allocs = @allocated pm(out_view, x)
+            @test allocs == 0
+        end
+
+        # View as output (Vector)
+        @testset "Vector view as output" begin
+            x_vec = generate_valid_input(model)
+
+            # Output view into larger buffer
+            buffer = Vector{Float64}(undef, nouts + 2)
+            out_view = @view buffer[2:nouts+1]
+
+            # Warmup
+            pm(out_view, x_vec)
+
+            # Verify correctness
+            y_alloc = pm(x_vec)
+            @test out_view == y_alloc
+
+            # Zero allocation after warmup
+            allocs = @allocated pm(out_view, x_vec)
+            @test allocs == 0
+        end
+
+        # View as input (Matrix)
+        @testset "Matrix view as input" begin
+            batch_size = 10
+
+            # Input view from larger buffer
+            x_buffer = Matrix{Float64}(undef, nins + 2, batch_size + 2)
+            x_core = generate_valid_input_matrix(model, batch_size)
+            x_buffer[2:nins+1, 2:batch_size+1] .= x_core
+            x_view = @view x_buffer[2:nins+1, 2:batch_size+1]
+
+            out = Matrix{Float64}(undef, nouts, batch_size)
+
+            # Warmup
+            pm(out, x_view)
+
+            # Verify correctness (compare with non-view input)
+            y_expected = pm(x_core)
+            @test out == y_expected
+
+            # Zero allocation after warmup
+            allocs = @allocated pm(out, x_view)
+            @test allocs == 0
+        end
+
+        # View to view (Matrix)
+        @testset "View to view (Matrix)" begin
+            batch_size = 10
+
+            # Input view
+            x_buffer = Matrix{Float64}(undef, nins + 2, batch_size + 2)
+            x_core = generate_valid_input_matrix(model, batch_size)
+            x_buffer[2:nins+1, 2:batch_size+1] .= x_core
+            x_view = @view x_buffer[2:nins+1, 2:batch_size+1]
+
+            # Output view
+            out_buffer = Matrix{Float64}(undef, nouts + 2, batch_size + 2)
+            out_view = @view out_buffer[2:nouts+1, 2:batch_size+1]
+
+            # Warmup
+            pm(out_view, x_view)
+
+            # Verify correctness
+            y_expected = pm(x_core)
+            @test out_view == y_expected
+
+            # Zero allocation after warmup
+            allocs = @allocated pm(out_view, x_view)
+            @test allocs == 0
+        end
+
+        # View to view (Vector)
+        @testset "View to view (Vector)" begin
+            # Input view
+            x_buffer = Vector{Float64}(undef, nins + 2)
+            x_core = generate_valid_input(model)
+            x_buffer[2:nins+1] .= x_core
+            x_view = @view x_buffer[2:nins+1]
+
+            # Output view
+            out_buffer = Vector{Float64}(undef, nouts + 2)
+            out_view = @view out_buffer[2:nouts+1]
+
+            # Warmup
+            pm(out_view, x_view)
+
+            # Verify correctness
+            y_expected = pm(x_core)
+            @test out_view == y_expected
+
+            # Zero allocation after warmup
+            allocs = @allocated pm(out_view, x_view)
+            @test allocs == 0
+        end
+    end
+
     @testset "PooledDense and PooledActivation types" begin
         ensemble = loadmodel("sat2_em_d3d_azf-1")
         model = ensemble.models[1]

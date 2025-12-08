@@ -193,35 +193,45 @@ end
 Wrapper that automatically manages `@with_pool` on each call.
 Use this when you want a simple callable interface without explicit pool management.
 
-Returns an owned `Array` (via `collect`), not a pool view. This is necessary because
-pool memory is rewound after `@with_pool` exits — returning a `SubArray` view would
-point to "free" memory that may be overwritten by subsequent pool operations.
-
-# Example
+# Usage
 ```julia
-# Create auto-managed pooled model
 model = PooledModel(poolify(flux_chain))
 
-# Just call it - no @with_pool needed!
-y = model(x)  # returns Array, safe to use after call
+# Allocating version - returns owned Array
+y = model(x)
+
+# In-place version - zero allocation (output first, Julia convention)
+model(y, x)  # writes result to y
 ```
 
 # Notes
-- Each call does: checkpoint → run → collect → rewind
-- The `collect` copies the result before pool rewind (only allocation after warmup)
+- Allocating `model(x)`: copies result via `collect` (only allocation after warmup)
+- In-place `model(out, x)`: uses `copyto!`, truly zero-allocation after warmup
 - Thread-safe via task-local storage
-- Pool intermediates are zero-allocation after warmup
+- Pool intermediates are reused across calls
 """
 struct PooledModel{M}
     model::M
 end
 
+# Allocating versions (return owned Array via collect)
 @with_pool function (pm::PooledModel)(x::AbstractMatrix)
     return collect(pm.model(x))::Matrix{Float64}
 end
 
 @with_pool function (pm::PooledModel)(x::AbstractVector)
     return collect(pm.model(x))::Vector{Float64}
+end
+
+# In-place versions: pm(output, input) following Julia convention (mutated arg first)
+@with_pool function (pm::PooledModel)(out::AbstractMatrix, x::AbstractMatrix)
+    copyto!(out, pm.model(x))
+    return out
+end
+
+@with_pool function (pm::PooledModel)(out::AbstractVector, x::AbstractVector)
+    copyto!(out, pm.model(x))
+    return out
 end
 
 
