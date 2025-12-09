@@ -263,7 +263,7 @@ end
 
 Single-sample inference: processes one vector through the model.
 """
-function flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN, xx::AbstractVector{T}=similar(x)) where {T<:Real}
+function flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
     nouts = length(fluxmodel.ynames)
     if fidelity == :GKNN
         nouts = div(nouts, 2)
@@ -932,10 +932,14 @@ end
 
 """
     flux_solution(xx::Vararg{T}) where {T<:Real}
+    flux_solution(xx::AbstractVector{T}) where {T<:Real}
 
-Constructor used to handle PARTICLE_FLUX_i entered as a set of scalars instead of an array
+Construct a `FluxSolution` from scalar arguments or a vector.
+
+Accepts either variadic arguments (scalars) or an `AbstractVector`.
 
     flux_solution(1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
+    flux_solution([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
 
 results in
 
@@ -957,42 +961,27 @@ results in
     Γi = []
     Πi = 2.0
 """
-function flux_solution(xx::Vararg{T}) where {T<:Real}
-    n_fields = length(xx)
-    if n_fields == 4
-        ENERGY_FLUX_e = 3
-        ENERGY_FLUX_i = 4
-        PARTICLE_FLUX_e = 1
-        STRESS_TOR_i = 2
-        sol = GACODE.FluxSolution{T}(xx[ENERGY_FLUX_e], xx[ENERGY_FLUX_i], xx[PARTICLE_FLUX_e], T[], xx[STRESS_TOR_i])
-    else
-        ENERGY_FLUX_e = n_fields - 1
-        ENERGY_FLUX_i = n_fields
-        PARTICLE_FLUX_e = 1
-        PARTICLE_FLUX_i = 2:n_fields-3
-        STRESS_TOR_i = n_fields - 2
-        sol = GACODE.FluxSolution{T}(xx[ENERGY_FLUX_e], xx[ENERGY_FLUX_i], xx[PARTICLE_FLUX_e], T[xx[i] for i in PARTICLE_FLUX_i], xx[STRESS_TOR_i])
-    end
-    return sol
-end
+flux_solution(xx::Vararg{T}) where {T<:Real} = _flux_solution_impl(xx)
+flux_solution(xx::AbstractVector{T}) where {T<:Real} = _flux_solution_impl(xx)
 
-function flux_solution(xx::AbstractVector{T}) where {T<:Real}
+# Common implementation for both Vararg (Tuple) and AbstractVector
+@inline function _flux_solution_impl(xx)
+    T = eltype(xx)
     n_fields = length(xx)
     if n_fields == 4
         ENERGY_FLUX_e = 3
         ENERGY_FLUX_i = 4
         PARTICLE_FLUX_e = 1
         STRESS_TOR_i = 2
-        sol = GACODE.FluxSolution{T}(xx[ENERGY_FLUX_e], xx[ENERGY_FLUX_i], xx[PARTICLE_FLUX_e], T[], xx[STRESS_TOR_i])
+        return GACODE.FluxSolution{T}(xx[ENERGY_FLUX_e], xx[ENERGY_FLUX_i], xx[PARTICLE_FLUX_e], T[], xx[STRESS_TOR_i])
     else
         ENERGY_FLUX_e = n_fields - 1
         ENERGY_FLUX_i = n_fields
         PARTICLE_FLUX_e = 1
         PARTICLE_FLUX_i = 2:n_fields-3
         STRESS_TOR_i = n_fields - 2
-        sol = GACODE.FluxSolution{T}(xx[ENERGY_FLUX_e], xx[ENERGY_FLUX_i], xx[PARTICLE_FLUX_e], T[xx[i] for i in PARTICLE_FLUX_i], xx[STRESS_TOR_i])
+        return GACODE.FluxSolution{T}(xx[ENERGY_FLUX_e], xx[ENERGY_FLUX_i], xx[PARTICLE_FLUX_e], T[xx[i] for i in PARTICLE_FLUX_i], xx[STRESS_TOR_i])
     end
-    return sol
 end
 
 

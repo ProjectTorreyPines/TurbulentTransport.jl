@@ -18,7 +18,6 @@
 
 import Flux
 import LinearAlgebra: mul!
-using AdaptiveArrayPools: get_task_local_pool, acquire!, @with_pool
 
 #= ====================================== =#
 #  Activation Detection
