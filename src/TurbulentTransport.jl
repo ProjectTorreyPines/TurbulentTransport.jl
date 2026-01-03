@@ -6,6 +6,8 @@ import TJLF
 import TJLF: InputTGLF, InputTJLF
 import GACODE
 
+include("models.jl")
+
 include("tglf.jl")
 
 include("input_tglfs.jl")
