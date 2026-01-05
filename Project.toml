@@ -4,7 +4,7 @@ version = "1.0.14"
 authors = ["Orso Meneghini <orso82@gmail.com>", "Tom Neiser <neisert@fusion.gat.com>"]
 
 [deps]
-AdaptiveArrayPools = "5768322a-0810-4546-8322-123456789abc"
+AdaptiveArrayPools = "4f381ef7-9af0-4cbe-99d4-cf36d7b0f233"
 BSON = "fbb218c0-5317-5bc6-957e-2ee96dd4b1f0"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 Flux = "587475ba-b771-5e3f-ad9e-33799f191a9c"
