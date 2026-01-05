@@ -214,28 +214,13 @@ function dict2ens(dict::Dict)
 end
 
 function loadmodel(filename::AbstractString)
-    if !endswith(filename, ".bson")
-        filename = "$(filename).bson"
-    end
-    if startswith(filename, "/")
-        fullpath = filename
-    else
-        fullpath = dirname(@__DIR__) * "/models/" * filename
-        if !isfile(fullpath)
-            error("TGLFNN model $filename does not exist. Possible nn models are:\n    $(join(available_models(),"\n    ",))")
-        end
-    end
+    fullpath = resolve_model_path(filename; extensions=[".bson"])
     savedict = BSON.load(fullpath, @__MODULE__)
     if typeof(first(keys(savedict))) <: Integer
         return dict2ens(savedict)
     else
         return dict2mod(savedict)
     end
-end
-
-function available_models()
-    models_dir = joinpath(dirname(@__DIR__), "models")
-    return [replace(model, r"\.(bson|onnx)$" => "") for model in readdir(models_dir) if endswith(model, ".bson") || endswith(model, ".onnx")]
 end
 
 #= ==================================== =#
@@ -766,12 +751,7 @@ function _load_ort!()
 end
 
 function _resolve_model_path(onnx_path::AbstractString)
-    if !occursin("/models/", onnx_path)
-        onnx_path = joinpath(dirname(@__DIR__), "models",
-                             endswith(onnx_path, ".onnx") ? onnx_path : onnx_path * ".onnx")
-    end
-    isfile(onnx_path) || error("TGLFNN model does not exist in $onnx_path")
-    return onnx_path
+    return resolve_model_path(onnx_path; extensions=[".onnx"])
 end
 
 function load_onnx_model(onnx_path::String; intra_threads::Int=1, inter_threads::Int=1)
