@@ -97,6 +97,23 @@ using TurbulentTransport: poolify, PooledChain, PooledDense, PooledActivation, P
         @test isapprox(y_orig, y_pooled; rtol=REGRESSION_RTOL)
     end
 
+    @testset "Bit-wise identical accuracy" begin
+        ensemble = loadmodel("sat2_em_d3d_azf-1")
+        model = ensemble.models[1]
+
+        # Poolify the model's fluxmodel
+        pm = PooledChain(model.fluxmodel)
+
+        x = generate_valid_input_matrix(model, 10)
+
+        # Test Matrix path (where input x is Matrix)
+        @test model.fluxmodel(x) == pm(x) # bit-wise identical
+
+        # Test vector path (where input x is Vector)
+        x_vec = x[:, 1]
+        @test model.fluxmodel(x_vec) == pm(x_vec) # bit-wise identical
+    end
+
     @testset "PooledChain minimal allocation (output only)" begin
         # After warmup, only the output array is allocated (via collect).
         # Pool intermediates are reused — no GC pressure from intermediate layers.

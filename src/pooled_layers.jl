@@ -48,19 +48,6 @@ struct PooledActivation{F}
     σ::F
 end
 
-@inline function _pooled_activation_forward!(pa::PooledActivation, x::AbstractVecOrMat)
-    pool = get_task_local_pool()
-    out = acquire!(pool, Float64, size(x))
-    out .= pa.σ.(x)
-    return out
-end
-
-# Matrix input → Matrix output
-(pa::PooledActivation)(x::AbstractMatrix) = _pooled_activation_forward!(pa, x)
-
-# Vector input → Vector output
-(pa::PooledActivation)(x::AbstractVector) = vec(_pooled_activation_forward!(pa, x))
-
 #= ====================================== =#
 #  PooledDense
 #= ====================================== =#
@@ -76,22 +63,6 @@ Requires `@with_pool` block at the outermost call site.
 struct PooledDense{D<:Flux.Dense}
     dense::D
 end
-
-@inline function _pooled_dense_forward!(pd::PooledDense, x::AbstractVecOrMat)
-    pool = get_task_local_pool()
-    d = pd.dense
-    Flux._size_check(d, x, 1 => size(d.weight, 2))
-    xT = Flux._match_eltype(d, x)
-    out = acquire!(pool, Float64, size(d.weight, 1), size(xT, 2))  # Vector output
-    mul!(out, d.weight, xT)
-    return Flux.NNlib.bias_act!(d.σ, out, d.bias)
-end
-
-# Matrix input → Matrix output
-(pd::PooledDense)(x::AbstractMatrix) = _pooled_dense_forward!(pd, x)
-
-# Vector input → Vector output
-(pd::PooledDense)(x::AbstractVector) = vec(_pooled_dense_forward!(pd, x))
 
 #= ====================================== =#
 #  PooledParallelAdd (ResNet skip connection)
@@ -128,6 +99,85 @@ end
     end
 
     return out
+end
+
+#= ====================================== =#
+#  Pool-Propagating Forward Pass
+#= ====================================== =#
+
+"""
+    _forward_with_pool(layer, x, pool)
+
+Forward pass that propagates pool through layers explicitly.
+Avoids repeated `get_task_local_pool()` calls by passing pool as argument.
+
+This is an internal function used by `PooledChain` to optimize inference.
+"""
+# PooledDense - Matrix path
+@inline function _forward_with_pool(pd::PooledDense, x::AbstractMatrix, pool)
+    d = pd.dense
+    Flux._size_check(d, x, 1 => size(d.weight, 2))
+    xT = Flux._match_eltype(d, x)
+    out = acquire!(pool, Float64, size(d.weight, 1), size(xT, 2))
+    mul!(out, d.weight, xT)
+    return Flux.NNlib.bias_act!(d.σ, out, d.bias)
+end
+
+# PooledDense - Vector path (BLAS gemv)
+@inline function _forward_with_pool(pd::PooledDense, x::AbstractVector, pool)
+    d = pd.dense
+    Flux._size_check(d, x, 1 => size(d.weight, 2))
+    xT = Flux._match_eltype(d, x)
+    out = acquire!(pool, Float64, size(d.weight, 1))
+    mul!(out, d.weight, xT)
+    return Flux.NNlib.bias_act!(d.σ, out, d.bias)
+end
+
+# PooledActivation - Matrix path
+@inline function _forward_with_pool(pa::PooledActivation, x::AbstractMatrix, pool)
+    out = acquire!(pool, Float64, size(x))
+    out .= pa.σ.(x)
+    return out
+end
+
+# PooledActivation - Vector path
+@inline function _forward_with_pool(pa::PooledActivation, x::AbstractVector, pool)
+    out = acquire!(pool, Float64, length(x))
+    out .= pa.σ.(x)
+    return out
+end
+
+# PooledParallelAdd
+@inline function _forward_with_pool(layer::PooledParallelAdd, x, pool)
+    # Run first branch with pool
+    out = _forward_with_pool(layer.layers[1], x, pool)
+
+    # Add remaining branches in-place
+    @inbounds for i in 2:length(layer.layers)
+        branch = layer.layers[i]
+        if branch === identity
+            out .+= x
+        else
+            out .+= _forward_with_pool(branch, x, pool)
+        end
+    end
+    return out
+end
+
+# Type-stable chain traversal using tuple recursion (like Flux._applychain)
+@inline _chain_forward_with_pool(::Tuple{}, x, pool) = x
+@inline _chain_forward_with_pool(layers::Tuple{Any}, x, pool) = _forward_with_pool(layers[1], x, pool)
+@inline function _chain_forward_with_pool(layers::Tuple, x, pool)
+    return _chain_forward_with_pool(Base.tail(layers), _forward_with_pool(layers[1], x, pool), pool)
+end
+
+@inline function _forward_with_pool(chain::Flux.Chain, x, pool)
+    return _chain_forward_with_pool(chain.layers, x, pool)
+end
+
+# Fallback for identity and unknown layers (don't need pool)
+@inline function _forward_with_pool(layer, x, pool)
+    return layer(x)
 end
 
 #= ====================================== =#
@@ -215,21 +265,37 @@ struct PooledChain{M<:Flux.Chain}
 end
 
 # Allocating versions (return owned Array via collect)
-@with_pool function (pm::PooledChain)(x::AbstractMatrix)
-    return collect(pm.model(x))::Matrix{Float64}
+# Uses _forward_with_pool to avoid repeated get_task_local_pool() calls
+function (pm::PooledChain)(x::AbstractMatrix)
+    pool = get_task_local_pool()
+    checkpoint!(pool, Float64)
+    result = collect(_forward_with_pool(pm.model, x, pool))::Matrix{Float64}
+    rewind!(pool, Float64)
+    return result
 end
 
-@with_pool function (pm::PooledChain)(x::AbstractVector)
-    return collect(pm.model(x))::Vector{Float64}
+function (pm::PooledChain)(x::AbstractVector)
+    pool = get_task_local_pool()
+    checkpoint!(pool, Float64)
+    result = collect(_forward_with_pool(pm.model, x, pool))::Vector{Float64}
+    rewind!(pool, Float64)
+    return result
 end
 
 # In-place versions: pm(output, input) following Julia convention (mutated arg first)
-@with_pool function (pm::PooledChain)(out::AbstractMatrix, x::AbstractMatrix)
-    copyto!(out, pm.model(x))
+# Uses _forward_with_pool to avoid repeated get_task_local_pool() calls
+function (pm::PooledChain)(out::AbstractMatrix, x::AbstractMatrix)
+    pool = get_task_local_pool()
+    checkpoint!(pool, Float64)
+    copyto!(out, _forward_with_pool(pm.model, x, pool))
+    rewind!(pool, Float64)
     return out
 end
 
-@with_pool function (pm::PooledChain)(out::AbstractVector, x::AbstractVector)
-    copyto!(out, pm.model(x))
+function (pm::PooledChain)(out::AbstractVector, x::AbstractVector)
+    pool = get_task_local_pool()
+    checkpoint!(pool, Float64)
+    copyto!(out, _forward_with_pool(pm.model, x, pool))
+    rewind!(pool, Float64)
     return out
 end
