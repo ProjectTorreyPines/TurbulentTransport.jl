@@ -603,7 +603,7 @@ The warn_nn_train_bounds checks against the standard deviation of the inputs to 
 Returns a vector of `flux_solution` structures
 """
 @with_pool pool function run_tglfnn(input_tglfs::Vector{InputTGLF{T}}; model_filename::String, uncertain::Bool=false, warn_nn_train_bounds::Bool, fidelity::Symbol=:TGLFNN) where {T<:Real}
-    if occursin("stfpp", model_filename)
+    if occursin("stfpp", model_filename) || occursin("tefpp", model_filename)
         for it in input_tglfs
             _apply_stfpp_transform!(it; dtf=0.5, device="")
         end
@@ -678,7 +678,7 @@ The warn_nn_train_bounds checks against the standard deviation of the inputs to 
 Returns a dictionary with fluxes
 """
 function run_tglfnn(data::Dict; model_filename::String, uncertain::Bool=false, warn_nn_train_bounds::Bool, fidelity::Symbol=:TGLFNN)
-    if occursin("stfpp", model_filename)
+    if occursin("stfpp", model_filename) || occursin("tefpp", model_filename)
         _apply_stfpp_transform!(data; dtf=0.5, device="")
     end
     if model_filename == "sat3_em_d3d_azf-1" && fidelity == :GKNN
