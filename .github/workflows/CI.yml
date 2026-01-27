@@ -39,9 +39,13 @@ jobs:
       - name: Add FuseRegistry
         run: |
           julia -e '
-            using Pkg
-            Pkg.Registry.add(RegistrySpec(url="https://github.com/ProjectTorreyPines/FuseRegistry.jl.git"))
-            Pkg.Registry.add("General")
+            using Pkg; 
+            try; 
+              Pkg.Registry.rm("FuseRegistry"); 
+            catch; 
+            end; 
+            Pkg.Registry.add(RegistrySpec(url="https://github.com/ProjectTorreyPines/FuseRegistry.jl.git")); 
+            Pkg.Registry.add("General"); 
             Pkg.Registry.update()
           '
 

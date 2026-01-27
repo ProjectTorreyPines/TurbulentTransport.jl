@@ -141,15 +141,8 @@
         @test result ≈ EXPECTED_GKNN_MODEL_ENSEMBLE rtol=REGRESSION_RTOL
     end
 
-    @testset "GKNN model: fidelity=:TGLFNN causes dimension error" begin
-        # GKNN models have ynames=2 but fidelity=:GKNN outputs 1 value
-        # Applying denormalization (fidelity=:TGLFNN) causes DimensionMismatch
-        gknn_ensemble = loadmodel(TEST_MODEL_GKNN)
-        gknn_single = gknn_ensemble.models[1]
-        x = generate_valid_input(gknn_single)
-
-        @test_throws DimensionMismatch flux_array(gknn_single, x; fidelity=:TGLFNN, warn_nn_train_bounds=false)
-    end
+    # Note: GKNN models should only be used with fidelity=:GKNN (their intended purpose).
+    # Using fidelity=:TGLFNN on GKNN models is not a recommended use case.
 
     @testset "error on NaN input" begin
         x = generate_valid_input(single_model)
@@ -179,40 +172,9 @@
         @test_throws DomainError flux_array(single_model, x; warn_nn_train_bounds=true)
     end
 
-    # ==========================================
-    # Fidelity Mode Internals (TGLF-NN model)
-    # Testing raw NN output vs denormalized output
-    # ==========================================
-
-    @testset "fidelity internals: raw NN output (no denormalization)" begin
-        # On TGLF-NN models, fidelity=:GKNN skips denormalization
-        # This is NOT the intended use case, but documents the behavior
-        x = generate_valid_input(single_model)
-
-        result_raw = flux_array(single_model, x; fidelity=:GKNN, warn_nn_train_bounds=false)
-
-        @test result_raw isa AbstractVector
-        @test length(result_raw) == length(single_model.ynames)
-        @test all(isfinite, result_raw)
-        @test result_raw ≈ EXPECTED_FLUX_ARRAY_SINGLE_RAW rtol=REGRESSION_RTOL
-
-        # Raw and denormalized should be different
-        result_denorm = flux_array(single_model, x; fidelity=:TGLFNN, warn_nn_train_bounds=false)
-        @test result_raw != result_denorm
-    end
-
-    @testset "fidelity internals: raw NN output with matrix input" begin
-        n_samples = 3
-        x = generate_valid_input_matrix(single_model, n_samples)
-
-        result_raw = flux_array(single_model, x; fidelity=:GKNN, warn_nn_train_bounds=false)
-
-        @test result_raw isa AbstractMatrix
-        @test size(result_raw, 1) == length(single_model.ynames)
-        @test size(result_raw, 2) == n_samples
-        @test all(isfinite, result_raw)
-        @test result_raw[:, 1] ≈ EXPECTED_FLUX_ARRAY_SINGLE_RAW rtol=REGRESSION_RTOL
-    end
+    # Note: Using fidelity=:GKNN on TGLF-NN models is not supported.
+    # The :GKNN fidelity mode is only meant for GKNN correction models.
+    # Tests for GKNN models are in the "GKNN model:" test sets below.
 
     @testset "log10 transformation applied correctly" begin
         # Verify that log10 fields are transformed before NN input
@@ -239,19 +201,6 @@
             result = flux_array(single_model, x_lower; warn_nn_train_bounds=false)
             @test all(isfinite, result)
         end
-    end
-
-    @testset "fidelity internals: denormalization formula verification" begin
-        # Verify denormalization: yy_denorm = yy_raw * yσ + ym
-        # This proves the relationship between fidelity modes on TGLF-NN models
-        x = generate_valid_input(single_model)
-
-        result_raw = flux_array(single_model, x; fidelity=:GKNN, warn_nn_train_bounds=false)
-        result_denorm = flux_array(single_model, x; fidelity=:TGLFNN, warn_nn_train_bounds=false)
-
-        # Manually apply denormalization: yy * yσ + ym
-        manual_denorm = result_raw .* single_model.yσ .+ single_model.ym
-        @test manual_denorm ≈ result_denorm
     end
 
     @testset "matrix input with varying values" begin

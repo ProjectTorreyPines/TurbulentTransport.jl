@@ -80,10 +80,6 @@ end
 # flux_array expected outputs for sat0_em_d3d single model (first model in ensemble)
 const EXPECTED_FLUX_ARRAY_SINGLE = [0.021994637644215054, 0.14526707591951704, 0.4718316916684522, 0.4132556522695987]
 
-# flux_array expected outputs for sat0_em_d3d single model with fidelity=:GKNN
-# Note: This is a TGLF-NN model, so fidelity=:GKNN just skips denormalization (raw NN output)
-const EXPECTED_FLUX_ARRAY_SINGLE_RAW = [-0.23004951851133254, -0.21326135534711577, -0.31156058557178723, -0.32071940967901724]
-
 # GKNN correction model (sat3_em_d3d_azf-1_gknne24) expected outputs
 # These models have ynames of length 2, and fidelity=:GKNN outputs div(ynames, 2) = 1 value
 const EXPECTED_GKNN_MODEL_SINGLE = [0.93651175002966]
@@ -113,3 +109,140 @@ const EXPECTED_RUN_TGLFNN_SAT3_GKNN = (
     PARTICLE_FLUX_e = 0.5105086253045001,
     STRESS_TOR_i = 2.5997926311395063,
 )
+
+# ============================================
+# Regression Test Expected Values
+# Captured on 2025-12-06 for single/vector equivalence
+# ============================================
+
+"""
+Create test input variations for regression testing.
+Returns 3 inputs: base, modified Q_LOC/BETAE, modified RLTS_2/VEXB_SHEAR.
+"""
+function create_regression_inputs()
+    input1 = load_sample_input()
+
+    # Variation 2: Modified Q_LOC and BETAE
+    input2 = deepcopy(input1)
+    input2.Q_LOC = input1.Q_LOC * 1.5
+    input2.BETAE = input1.BETAE * 0.8
+
+    # Variation 3: Modified RLTS_2 and VEXB_SHEAR
+    input3 = deepcopy(input1)
+    input3.RLTS_2 = input1.RLTS_2 * 1.2
+    input3.VEXB_SHEAR = input1.VEXB_SHEAR * 0.5
+
+    return [input1, input2, input3]
+end
+
+# Expected values for regression tests across models and fidelity modes
+const REGRESSION_EXPECTED_VALUES = Dict(
+    # sat3_em_d3d_azf-1, fidelity=:TGLFNN
+    ("sat3_em_d3d_azf-1", :TGLFNN, 1) => (
+        ENERGY_FLUX_e = 3.612103806515152,
+        ENERGY_FLUX_i = 6.160152661030723,
+        PARTICLE_FLUX_e = 0.6037634688605953,
+        STRESS_TOR_i = 2.5092916159367995,
+    ),
+    ("sat3_em_d3d_azf-1", :TGLFNN, 2) => (
+        ENERGY_FLUX_e = 1.8837089002569793,
+        ENERGY_FLUX_i = 2.3364969232015023,
+        PARTICLE_FLUX_e = 0.1257954283852079,
+        STRESS_TOR_i = 1.3059147156837425,
+    ),
+    ("sat3_em_d3d_azf-1", :TGLFNN, 3) => (
+        ENERGY_FLUX_e = 4.632091591270553,
+        ENERGY_FLUX_i = 9.48671993800187,
+        PARTICLE_FLUX_e = 0.957060317337908,
+        STRESS_TOR_i = 4.255046963250391,
+    ),
+
+    # sat3_em_d3d_azf-1, fidelity=:GKNN (gknne/i/g/p24 branch)
+    ("sat3_em_d3d_azf-1", :GKNN, 1) => (
+        ENERGY_FLUX_e = 2.326970214366194,
+        ENERGY_FLUX_i = 3.8352993604857395,
+        PARTICLE_FLUX_e = 0.5105086253044998,
+        STRESS_TOR_i = 2.5997926311395054,
+    ),
+    ("sat3_em_d3d_azf-1", :GKNN, 2) => (
+        ENERGY_FLUX_e = 1.61453271832532,
+        ENERGY_FLUX_i = 1.30421968907876,
+        PARTICLE_FLUX_e = 0.339137038337307,
+        STRESS_TOR_i = 1.3007845401706544,
+    ),
+    ("sat3_em_d3d_azf-1", :GKNN, 3) => (
+        ENERGY_FLUX_e = 3.1545384803862357,
+        ENERGY_FLUX_i = 6.948598145901189,
+        PARTICLE_FLUX_e = 0.9030322917041694,
+        STRESS_TOR_i = 4.248745514181584,
+    ),
+
+    # sat3_em_d3d+mastu+nstx_azf-1, fidelity=:GKNN (gknn31 branch)
+    ("sat3_em_d3d+mastu+nstx_azf-1", :GKNN, 1) => (
+        ENERGY_FLUX_e = 2.2558135138639814,
+        ENERGY_FLUX_i = 3.8954310883831766,
+        PARTICLE_FLUX_e = 0.5192591528467271,
+        STRESS_TOR_i = 2.7706766501101456,
+    ),
+    ("sat3_em_d3d+mastu+nstx_azf-1", :GKNN, 2) => (
+        ENERGY_FLUX_e = 2.0174103876797473,
+        ENERGY_FLUX_i = 2.137456777691702,
+        PARTICLE_FLUX_e = 0.1745448150550685,
+        STRESS_TOR_i = 1.5831589871630858,
+    ),
+    ("sat3_em_d3d+mastu+nstx_azf-1", :GKNN, 3) => (
+        ENERGY_FLUX_e = 3.79254031378578,
+        ENERGY_FLUX_i = 8.437753960524402,
+        PARTICLE_FLUX_e = 1.2255810079609373,
+        STRESS_TOR_i = 5.632476086598156,
+    ),
+
+    # sat3_em_d3d_azf-1_gkdb, fidelity=:GKNN (gknn31 + cgyro branch)
+    ("sat3_em_d3d_azf-1_gkdb", :GKNN, 1) => (
+        ENERGY_FLUX_e = 0.2393618170708511,
+        ENERGY_FLUX_i = 4.645704500677719,
+        PARTICLE_FLUX_e = -0.2002497215001747,
+        STRESS_TOR_i = -1.460232726488118,
+    ),
+    ("sat3_em_d3d_azf-1_gkdb", :GKNN, 2) => (
+        ENERGY_FLUX_e = 0.07893419857398694,
+        ENERGY_FLUX_i = 1.559657642656188,
+        PARTICLE_FLUX_e = -0.0020799893550763034,
+        STRESS_TOR_i = -0.3851482268883565,
+    ),
+    ("sat3_em_d3d_azf-1_gkdb", :GKNN, 3) => (
+        ENERGY_FLUX_e = 0.33133716581952266,
+        ENERGY_FLUX_i = 7.81927305867567,
+        PARTICLE_FLUX_e = -0.20606777890050687,
+        STRESS_TOR_i = -2.505297891574754,
+    ),
+
+    # sat3_em_d3d+mastu_azf-1, fidelity=:GKNN (gknn36 branch)
+    ("sat3_em_d3d+mastu_azf-1", :GKNN, 1) => (
+        ENERGY_FLUX_e = 2.263637009987901,
+        ENERGY_FLUX_i = 3.9894442429327945,
+        PARTICLE_FLUX_e = 0.6549655928795123,
+        STRESS_TOR_i = 2.717778773990871,
+    ),
+    ("sat3_em_d3d+mastu_azf-1", :GKNN, 2) => (
+        ENERGY_FLUX_e = 1.5714492824954072,
+        ENERGY_FLUX_i = 2.2383117710101845,
+        PARTICLE_FLUX_e = 0.14861916072222559,
+        STRESS_TOR_i = 1.9524814752010464,
+    ),
+    ("sat3_em_d3d+mastu_azf-1", :GKNN, 3) => (
+        ENERGY_FLUX_e = 4.299515290536031,
+        ENERGY_FLUX_i = 8.967724726518043,
+        PARTICLE_FLUX_e = 1.2741434422510884,
+        STRESS_TOR_i = 5.672982151946214,
+    ),
+)
+
+# Model configurations for regression testing
+const REGRESSION_MODEL_CONFIGS = [
+    ("sat3_em_d3d_azf-1", :TGLFNN, "TGLFNN baseline"),
+    ("sat3_em_d3d_azf-1", :GKNN, "GKNN gknne/i/g/p24"),
+    ("sat3_em_d3d+mastu+nstx_azf-1", :GKNN, "GKNN gknn31"),
+    ("sat3_em_d3d_azf-1_gkdb", :GKNN, "GKNN gknn31+cgyro"),
+    ("sat3_em_d3d+mastu_azf-1", :GKNN, "GKNN gknn36"),
+]

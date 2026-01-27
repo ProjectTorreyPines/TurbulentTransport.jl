@@ -29,6 +29,9 @@ struct TGLFNNmodel <: TGLFmodel
     xbounds::Array{Float64}
     ybounds::Array{Float64}
     nions::Int
+
+    # Pre-initialized PooledChain for zero-allocation inference (not serialized)
+    _pooled_chain::PooledChain
 end
 
 function Base.show(io::IO, mime::MIME"text/plain", model::TGLFNNmodel)
@@ -65,12 +68,98 @@ function Base.getproperty(ensemble::TGLFNNensemble, field::Symbol)
     end
 end
 
+#= ====================================== =#
+#  Zero-allocation field extraction cache
+#= ====================================== =#
+
+# Cache for field symbols Val types. Uses content hash (not objectid) so:
+# - Same xnames content → same cache entry (memory efficient)
+# - Cache size bounded by unique xnames patterns, not model instances
+const _XNAMES_FIELD_SYMBOLS_CACHE = Dict{UInt64, Any}()
+
+"""
+    _get_xnames_without_log10_suffix(model::TGLFNNmodel)
+
+Get cached `Val{Tuple{Symbol...}}` of InputTGLF field names from model's xnames.
+Strips `_log10` suffix: `"BETAE_log10"` → `:BETAE`
+"""
+function _get_xnames_without_log10_suffix(model::TGLFNNmodel)
+    key = hash(model.xnames)  # content-based, not objectid
+    get!(_XNAMES_FIELD_SYMBOLS_CACHE, key) do
+        symbols = Tuple(Symbol(endswith(x, log_suffix) ? x[1:end-n_log_suffix] : x) for x in model.xnames)
+        Val(symbols)
+    end
+end
+
+function _get_xnames_without_log10_suffix(ensemble::TGLFNNensemble)
+    _get_xnames_without_log10_suffix(ensemble.models[1])
+end
+
+"""
+    _extract_fields!(inputs::AbstractVector, obj, ::Val{symbols}, index::Int=0)
+
+Zero-allocation field extraction using compile-time unrolled field access.
+`symbols` is a tuple of field names known at compile time via `Val`.
+`index` is the radial location index for error messages (default 0).
+"""
+@generated function _extract_fields!(inputs::AbstractVector, obj, ::Val{symbols}, index::Int=0) where {symbols}
+    exprs = []
+    for (i, s) in enumerate(symbols)
+        push!(exprs, quote
+            let value = getfield(obj, $(QuoteNode(s)))
+                if ismissing(value)
+                    _throw_missing_field_error($(QuoteNode(s)), index)
+                end
+                @inbounds inputs[$i] = value
+            end
+        end)
+    end
+    return Expr(:block, exprs..., :inputs)
+end
+
+# Function barrier: specializes on concrete Val type, avoiding dynamic dispatch in loop
+function _extract_all_inputs!(inputs::AbstractMatrix, input_tglfs::Vector{InputTGLF{T}}, xnames_val::Val) where {T<:Real}
+    for (i, input_tglf) in enumerate(input_tglfs)
+        _extract_fields!(@view(inputs[:, i]), input_tglf, xnames_val, i)
+    end
+    return inputs
+end
+
+# Error function separated for hot path optimization (@noinline keeps it out of inlined code)
+@noinline function _throw_missing_field_error(field::Symbol, index::Int)
+    field_str = string(field)
+    hint = ""
+    if occursin("_5", field_str) || occursin("_6", field_str)
+        hint = "\n\nHint: Missing species data (species 5 or 6). If using a TGLFNN model (e.g. 'stfpp' models), try setting:\n  act.ActorTGLF.lump_ions = false\nto ensure ion species are treated separately rather than lumped together."
+    end
+    error("TGLFNN input field '$field_str' is Missing at radial location $index. Check that all required equilibrium and profile data are properly initialized.$hint")
+end
+
+#= ====================================== =#
+#  Pooled layer convenience methods
+#= ====================================== =#
+
+"""
+    poolify(model::TGLFNNmodel)
+
+Convert a TGLFNNmodel's fluxmodel to use pooled layers.
+"""
+poolify(model::TGLFNNmodel) = poolify(model.fluxmodel)
+
+"""
+    PooledChain(model::TGLFNNmodel)
+
+Convenience constructor: creates a PooledChain from a TGLFNNmodel.
+"""
+PooledChain(model::TGLFNNmodel) = PooledChain(poolify(model.fluxmodel))
+
 #= ============== =#
 #  saving/loading  #
 #= ============== =#
 function mod2dict(model::TGLFNNmodel)
     savedict = Dict()
     for name in fieldnames(TGLFNNmodel)
+        name === :_pooled_chain && continue  # Skip cache field (not serialized)
         value = getproperty(model, name)
         savedict[name] = value
     end
@@ -111,6 +200,8 @@ function dict2mod(savedict::AbstractDict)
         elseif name == :nions
             nions = maximum(map(m -> parse(Int, m[1]), filter(!isnothing, match.(r"_([0-9]+$)", savedict[:xnames])))) - 1
             push!(args, nions)
+        elseif name === :_pooled_chain
+            push!(args, PooledChain(poolify(savedict[:fluxmodel])))
         else
             push!(args, savedict[name])
         end
@@ -142,12 +233,55 @@ end
 Batched inference: processes entire `[N_features, M_samples]` matrix in single forward pass.
 """
 function flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
+    nouts = length(fluxmodel.ynames)
+    if fidelity == :GKNN
+        nouts = div(nouts, 2)
+    end
+    yy = Matrix{T}(undef, nouts, size(x, 2))
+
+    flux_array!(yy, fluxmodel, x; warn_nn_train_bounds, fidelity)
+    return yy
+end
+
+"""
+    flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; ...) where {T<:Real}
+
+Single-sample inference: processes one vector through the model.
+"""
+function flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
+    nouts = length(fluxmodel.ynames)
+    if fidelity == :GKNN
+        nouts = div(nouts, 2)
+    end
+    yy = Vector{T}(undef, nouts)
+    flux_array!(yy, fluxmodel, x; warn_nn_train_bounds, fidelity)
+    return yy
+end
+
+
+"""
+    flux_array!(out_y::AbstractMatrix{T}, fluxmodel::TGLFNNmodel, x::AbstractMatrix{T};
+                warn_nn_train_bounds=true, fidelity=:TGLFNN) where {T<:Real}
+
+In-place batched inference with **zero allocation** (requires AdaptiveArrayPools.jl v0.2.1+).
+
+Processes `[N_features, M_samples]` matrix through the model and writes results to `out_y`.
+
+# Arguments
+- `out_y::AbstractMatrix{T}`: Pre-allocated output matrix `[N_outputs, M_samples]`
+- `fluxmodel::TGLFNNmodel`: Neural network model
+- `x::AbstractMatrix{T}`: Input features `[N_features, M_samples]`
+- `warn_nn_train_bounds::Bool=true`: Warn if extrapolating beyond training bounds
+- `fidelity::Symbol=:TGLFNN`: Output mode (`:TGLFNN` for denormalized, `:GKNN` for normalized)
+
+"""
+@with_pool pool function flux_array!(out_y::AbstractMatrix{T}, fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
     N, M = size(x)  # N = input features, M = samples
 
-    # Allocate working matrix (same type as input)
-    xx = similar(x)
-
-    # Apply log10 transform where needed (name-based check)
+    # unsafe_acquire! returns Array (not ReshapedArray) to avoid boxing with non-concrete _pooled_chain
+    xx = unsafe_acquire!(pool, T, size(x))
+    
+    # Apply log10 transform where needed (determined by feature name)
     @inbounds for i in 1:N
         if contains(fluxmodel.xnames[i], log_suffix)
             for j in 1:M
@@ -160,7 +294,7 @@ function flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; warn_nn_train_
         end
     end
 
-    # Bounds checking (only on first column to avoid spam)
+    # Validate bounds (check first sample only to avoid warning spam)
     if warn_nn_train_bounds
         for ix in 1:N
             val = xx[ix, 1]
@@ -174,7 +308,7 @@ function flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; warn_nn_train_
         end
     end
 
-    # Normalize: (xx - mean) / std
+    # Normalize inputs: (xx - mean) / std
     @inbounds for i in 1:N
         xm_i = fluxmodel.xm[i]
         xσ_i = fluxmodel.xσ[i]
@@ -183,39 +317,56 @@ function flux_array(fluxmodel::TGLFNNmodel, x::AbstractMatrix{T}; warn_nn_train_
         end
     end
 
-    # Single forward pass through the entire batch
-    yy = fluxmodel.fluxmodel(xx)::Matrix{Float64}
+    # Forward pass through neural network (zero allocation via pooled layers)
+    fluxmodel._pooled_chain(out_y, xx)
 
     if fidelity == :GKNN
-        return yy
+        return out_y
     elseif fidelity == :TGLFNN
-        # Denormalize output: yy * yσ + ym
-        nouts = size(yy, 1)
+        # Denormalize outputs: out_y * yσ + ym
+        nouts = size(out_y, 1)
         @inbounds for i in 1:nouts
             ym_i = fluxmodel.ym[i]
             yσ_i = fluxmodel.yσ[i]
             for j in 1:M
-                yy[i, j] = yy[i, j] * yσ_i + ym_i
+                out_y[i, j] = out_y[i, j] * yσ_i + ym_i
             end
         end
-        return yy
+        return out_y
     else
         error("Unknown fidelity mode: $fidelity. Expected :GKNN or :TGLFNN")
     end
 end
 
-"""
-    flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; ...) where {T<:Real}
 
-Single-sample inference: processes one vector through the model.
 """
-function flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN, xx::AbstractVector{T}=similar(x)) where {T<:Real}
+    flux_array!(out_y::AbstractVector{T}, fluxmodel::TGLFNNmodel, x::AbstractVector{T};
+                warn_nn_train_bounds=true, fidelity=:TGLFNN) where {T<:Real}
+
+In-place single-sample inference with **zero allocation** (requires AdaptiveArrayPools.jl v0.2.1+).
+
+Processes one input vector through the model and writes results to `out_y`.
+
+# Arguments
+- `out_y::AbstractVector{T}`: Pre-allocated output vector `[N_outputs]`
+- `fluxmodel::TGLFNNmodel`: Neural network model
+- `x::AbstractVector{T}`: Input features `[N_features]`
+- `warn_nn_train_bounds::Bool=true`: Warn if extrapolating beyond training bounds
+- `fidelity::Symbol=:TGLFNN`: Output mode (`:TGLFNN` for denormalized, `:GKNN` for normalized)
+
+"""
+@with_pool pool function flux_array!(out_y::AbstractVector{T}, fluxmodel::TGLFNNmodel, x::AbstractVector{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
     N = length(x)
 
+    # unsafe_acquire! returns Array (not ReshapedArray) to avoid boxing with non-concrete _pooled_chain
+    xx = unsafe_acquire!(pool, T, N)
+
+    # Apply log10 transform where needed (determined by feature name)
     for (ix, name) in enumerate(fluxmodel.xnames)
         xx[ix] = contains(name, "_log10") ? log10(x[ix]) : x[ix]
     end
 
+    # Validate bounds
     if warn_nn_train_bounds
         for ix in 1:N
             if isnan(xx[ix]) || isinf(xx[ix])
@@ -228,16 +379,77 @@ function flux_array(fluxmodel::TGLFNNmodel, x::AbstractVector{T}; warn_nn_train_
         end
     end
 
+    # Normalize inputs: (xx - mean) / std
     @. xx = (xx - fluxmodel.xm) / fluxmodel.xσ
-    yy = fluxmodel.fluxmodel(xx)::Vector{Float64}
+
+    # Forward pass through neural network (zero allocation via pooled layers)
+    fluxmodel._pooled_chain(out_y, xx)
 
     if fidelity == :GKNN
-        return yy
+        return out_y
     elseif fidelity == :TGLFNN
-        @. yy = yy * fluxmodel.yσ + fluxmodel.ym
-        return yy
+        # Denormalize outputs: out_y * yσ + ym
+        @. out_y = out_y * fluxmodel.yσ + fluxmodel.ym
+        return out_y
     else
         error("Unknown fidelity mode: $fidelity. Expected :GKNN or :TGLFNN")
+    end
+end
+
+
+#= ====================================== =#
+#  Ensemble inference helpers (function barriers for type stability)
+#= ====================================== =#
+
+"""
+    _flux_array_sequential!(all_yy, fluxensemble, x; ...) -> nothing
+
+Sequential ensemble inference. Reuses single buffer across models (zero-alloc after warmup).
+"""
+@with_pool pool function _flux_array_sequential!(all_yy::AbstractArray{T,3}, fluxensemble::TGLFNNensemble, x::AbstractArray{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
+    nouts, nsamples, nmodels = size(all_yy)
+    each_y = unsafe_acquire!(pool, T, nouts, nsamples)
+    for k in 1:nmodels
+        flux_array!(each_y, fluxensemble.models[k], x; warn_nn_train_bounds=(warn_nn_train_bounds && k == 1), fidelity)
+        all_yy[:, :, k] = each_y
+    end
+end
+
+# Vector input variant
+@with_pool pool function _flux_array_sequential!(all_yy::AbstractMatrix{T}, fluxensemble::TGLFNNensemble, x::AbstractVector{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
+    nouts, nmodels = size(all_yy)
+    each_y = unsafe_acquire!(pool, T, nouts)
+    for k in 1:nmodels
+        flux_array!(each_y, fluxensemble.models[k], x; warn_nn_train_bounds=(warn_nn_train_bounds && k == 1), fidelity)
+        all_yy[:, k] = each_y
+    end
+end
+
+"""
+    _flux_array_threaded!(all_yy, fluxensemble, x; ...) -> nothing
+
+Threaded ensemble inference. Each thread uses its own pool buffer (thread-safe).
+"""
+function _flux_array_threaded!(all_yy::AbstractArray{T,3}, fluxensemble::TGLFNNensemble, x::AbstractArray{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
+    nouts, nsamples, nmodels = size(all_yy)
+    Threads.@threads for k in 1:nmodels
+        @with_pool thread_pool begin
+            each_y = unsafe_acquire!(thread_pool, T, nouts, nsamples)
+            flux_array!(each_y, fluxensemble.models[k], x; warn_nn_train_bounds=(warn_nn_train_bounds && k == 1), fidelity)
+            all_yy[:, :, k] = each_y
+        end
+    end
+end
+
+# Vector input variant
+function _flux_array_threaded!(all_yy::AbstractMatrix{T}, fluxensemble::TGLFNNensemble, x::AbstractVector{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
+    nouts, nmodels = size(all_yy)
+    Threads.@threads for k in 1:nmodels
+        @with_pool thread_pool begin
+            each_y = unsafe_acquire!(thread_pool, T, nouts)
+            flux_array!(each_y, fluxensemble.models[k], x; warn_nn_train_bounds=(warn_nn_train_bounds && k == 1), fidelity)
+            all_yy[:, k] = each_y
+        end
     end
 end
 
@@ -246,28 +458,43 @@ end
 
 Ensemble batched inference: runs all models in parallel, returns mean (± std if `uncertain=true`).
 """
-function flux_array(fluxensemble::TGLFNNensemble, x::AbstractArray{T}; uncertain::Bool=false, warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
+@with_pool pool function flux_array(fluxensemble::TGLFNNensemble, x::AbstractArray{T}; uncertain::Bool=false, warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
     nmodels = length(fluxensemble.models)
     nouts = length(fluxensemble.models[1].ynames)
     if fidelity == :GKNN
         nouts = div(nouts, 2)
     end
-    nsamples = size(x)[2]
+    nsamples = size(x, 2)
 
-    tmp = zeros(T, nmodels, nouts, nsamples)
-    Threads.@threads for k in 1:length(fluxensemble.models)
-        tmp[k, :, :] = flux_array(fluxensemble.models[k], x; warn_nn_train_bounds=(warn_nn_train_bounds && k == 1), fidelity)
+    # Store each model's output: (nouts, nsamples, nmodels) for efficient slice access
+    all_yy = unsafe_acquire!(pool, T, nouts, nsamples, nmodels)
+    if Threads.nthreads() == 1
+        _flux_array_sequential!(all_yy, fluxensemble, x; warn_nn_train_bounds, fidelity)
+    else
+        _flux_array_threaded!(all_yy, fluxensemble, x; warn_nn_train_bounds, fidelity)
     end
 
-    mean, std = StatsBase.mean_and_std(tmp, 1; corrected=true)
+    # Compute mean using broadcasting
+    mean_out = zeros(T, nouts, nsamples)
+    @inbounds for k in 1:nmodels
+        @. @views mean_out += all_yy[:, :, k]
+    end
+    mean_out ./= nmodels
+
     if uncertain && nmodels > 1
         if T <: Measurements.Measurement
-            return mean[1, :, :]
+            return mean_out
         else
-            return Measurements.measurement.(mean[1, :, :], std[1, :, :])
+            # Compute std using broadcasting
+            std_out = zeros(T, nouts, nsamples)
+            @inbounds for k in 1:nmodels
+                @. @views std_out += (all_yy[:, :, k] - mean_out)^2
+            end
+            @. std_out = sqrt(std_out / (nmodels - 1))
+            return Measurements.measurement.(mean_out, std_out)
         end
     else
-        return mean[1, :, :]
+        return mean_out
     end
 end
 
@@ -276,27 +503,43 @@ end
 
 Ensemble single-sample inference: runs all models on one vector, returns mean (± std if `uncertain=true`).
 """
-function flux_array(fluxensemble::TGLFNNensemble, x::AbstractVector{T}; uncertain::Bool=false, warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
+@with_pool pool function flux_array(fluxensemble::TGLFNNensemble, x::AbstractVector{T}; uncertain::Bool=false, warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
     nmodels = length(fluxensemble.models)
     nouts = length(fluxensemble.models[1].ynames)
     if fidelity == :GKNN
         nouts = div(nouts, 2)
     end
 
-    tmp = zeros(T, nmodels, nouts)
-    Threads.@threads for k in 1:length(fluxensemble.models)
-        tmp[k, :] = flux_array(fluxensemble.models[k], x; warn_nn_train_bounds=(warn_nn_train_bounds && k == 1), fidelity)
+    # Store each model's output: (nouts, nmodels) for efficient slice access
+    all_yy = unsafe_acquire!(pool, T, nouts, nmodels)
+    if Threads.nthreads() == 1
+        _flux_array_sequential!(all_yy, fluxensemble, x; warn_nn_train_bounds, fidelity)
+    else
+        _flux_array_threaded!(all_yy, fluxensemble, x; warn_nn_train_bounds, fidelity)
     end
 
-    mean, std = StatsBase.mean_and_std(tmp, 1; corrected=true)
-    if uncertain
+    # Compute mean using broadcasting
+    mean_out = zeros(T, nouts)
+    @inbounds for k in 1:nmodels
+        @. @views mean_out += all_yy[:, k]
+    end
+    mean_out ./= nmodels
+
+    if uncertain && nmodels > 1
+        # Compute std using broadcasting
+        std_out = zeros(T, nouts)
+        @inbounds for k in 1:nmodels
+            @. @views std_out += (all_yy[:, k] - mean_out)^2
+        end
+        @. std_out = sqrt(std_out / (nmodels - 1))
+
         if T <: Measurements.Measurement
-            return mean[1, :]
+            return mean_out
         else
-            return Measurements.measurement.(mean[1, :], std[1, :])
+            return Measurements.measurement.(mean_out, std_out)
         end
     else
-        return mean[1, :]
+        return mean_out
     end
 end
 
@@ -328,7 +571,7 @@ end
 #  run_tglfnn
 #= ========== =#
 """
-    run_tglfnn(input_tglf::InputTGLF; model_filename::String, uncertain::Bool=false, warn_nn_train_bounds::Bool, fidelity::Symbol=:TGLFNN)
+    run_tglfnn(input_tglf::InputTGLF; model_filename, warn_nn_train_bounds, uncertain=false, fidelity=:TGLFNN) -> GACODE.FluxSolution
 
 Run TGLFNN starting from a InputTGLF, using a specific `model_filename`.
 
@@ -337,79 +580,13 @@ If the model is an ensemble of NNs, then the output can be uncertain (using the 
 The warn_nn_train_bounds checks against the standard deviation of the inputs to warn if evaluation is likely outside of training bounds.
 
 Returns a `flux_solution` structure
+
+NOTE: Single-input convenience wrapper. Delegates to the vector version.
+
+See [`run_tglfnn(::Vector{InputTGLF})`](@ref) for details.
 """
 function run_tglfnn(input_tglf::InputTGLF{T}; model_filename::String, uncertain::Bool=false, warn_nn_train_bounds::Bool, fidelity::Symbol=:TGLFNN) where {T<:Real}
-    # In-place transform for any model containing "stfpp"
-    if occursin("stfpp", model_filename)
-        _apply_stfpp_transform!(input_tglf; dtf=0.5, device="")
-    end
-    if model_filename in ("sat3_em_d3d_azf-1",) && fidelity == :GKNN
-        tglfmod = loadmodelonce(model_filename * "_tglfnn24")
-    else
-        tglfmod = loadmodelonce(model_filename)
-    end
-    inputs = zeros(length(tglfmod.xnames))
-    for (k, item) in enumerate(tglfmod.xnames)
-        item = replace(item, "_log10" => "")
-        inputs[k] = getfield(input_tglf, Symbol(item))
-    end
-    sol = tglfmod(inputs...; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
-    if fidelity == :GKNN
-        supported_gknn_models = ["sat3_em_d3d_azf-1", "sat3_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d_azf-1_withnegD", "sat3_em_d3d_azf-1_gkdb", "sat2_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d+mastu_azf-1"]
-        if !(model_filename in supported_gknn_models)
-            error("GKNN fidelity is not supported for model '$model_filename'. Supported models are: $(join(supported_gknn_models, ", "))")
-        end
-        base_fluxes = [sol.ENERGY_FLUX_e, sol.ENERGY_FLUX_i, sol.PARTICLE_FLUX_e, sol.STRESS_TOR_i]
-        if model_filename in ("sat3_em_d3d_azf-1",)
-            gknne = loadmodelonce(model_filename * "_gknne24")
-            err_e = flux_array(gknne, vcat(inputs, base_fluxes[1]); uncertain, warn_nn_train_bounds, fidelity)
-            gknni = loadmodelonce(model_filename * "_gknni24")
-            err_i = flux_array(gknni, vcat(inputs, base_fluxes[2]); uncertain, warn_nn_train_bounds, fidelity)
-            gknng = loadmodelonce(model_filename * "_gknng24")
-            err_g = flux_array(gknng, vcat(inputs, base_fluxes[3]); uncertain, warn_nn_train_bounds, fidelity)
-            gknnp = loadmodelonce(model_filename * "_gknnp24")
-            err_p = flux_array(gknnp, vcat(inputs, base_fluxes[4]); uncertain, warn_nn_train_bounds, fidelity)
-            sol = GACODE.FluxSolution{T}(
-                base_fluxes[1] * err_e[1],  # ENERGY_FLUX_e
-                base_fluxes[2] * err_i[1],  # ENERGY_FLUX_i
-                base_fluxes[3] * err_g[1],  # PARTICLE_FLUX_e
-                Float64[],                   # PARTICLE_FLUX_i (empty for this model)
-                base_fluxes[4] * err_p[1]   # STRESS_TOR_i
-            )
-        elseif model_filename in ("sat3_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d_azf-1_withnegD", "sat3_em_d3d_azf-1_gkdb", "sat2_em_d3d+mastu+nstx_azf-1")
-            gknn = loadmodelonce(model_filename * "_gknn31")
-            err = flux_array(gknn, vcat(inputs, [base_fluxes[3], base_fluxes[4], base_fluxes[1], base_fluxes[2]]); uncertain, warn_nn_train_bounds, fidelity)
-            sol = GACODE.FluxSolution{T}(
-                sol.ENERGY_FLUX_e * err[3],
-                sol.ENERGY_FLUX_i * err[4],
-                sol.PARTICLE_FLUX_e * err[1],
-                Float64[],                   # PARTICLE_FLUX_i (empty for this model)
-                sol.STRESS_TOR_i * err[2]
-            )
-            if model_filename in ("sat3_em_d3d_azf-1_gkdb",)
-                gkdb = loadmodelonce(model_filename * "_gknn31_cgyro")
-                gkdb_err = flux_array(gkdb, vcat(inputs, [sol.PARTICLE_FLUX_e, sol.STRESS_TOR_i, sol.ENERGY_FLUX_e, sol.ENERGY_FLUX_i]); uncertain, warn_nn_train_bounds, fidelity)
-                sol = GACODE.FluxSolution{T}(
-                    sol.ENERGY_FLUX_e * gkdb_err[3],
-                    sol.ENERGY_FLUX_i * gkdb_err[4],
-                    sol.PARTICLE_FLUX_e * gkdb_err[1],
-                    Float64[],                   # PARTICLE_FLUX_i (empty for this model)
-                    sol.STRESS_TOR_i * gkdb_err[2]
-                )
-            end
-        elseif model_filename in ["sat3_em_d3d+mastu_azf-1"]
-            gknn = loadmodelonce(model_filename * "_gknn36")
-            err = flux_array(gknn, vcat(inputs, [base_fluxes[3], base_fluxes[4], base_fluxes[1], base_fluxes[2]]); uncertain, warn_nn_train_bounds, fidelity)
-            sol = GACODE.FluxSolution{T}(
-                sol.ENERGY_FLUX_e * err[3],
-                sol.ENERGY_FLUX_i * err[4],
-                sol.PARTICLE_FLUX_e * err[1],
-                Float64[],                   # PARTICLE_FLUX_i (empty for this model)
-                sol.STRESS_TOR_i * err[2]
-            )
-        end
-    end
-    return sol
+    return run_tglfnn([input_tglf]; model_filename, uncertain, warn_nn_train_bounds, fidelity)[1]
 end
 
 """
@@ -425,71 +602,67 @@ The warn_nn_train_bounds checks against the standard deviation of the inputs to 
 
 Returns a vector of `flux_solution` structures
 """
-function run_tglfnn(input_tglfs::Vector{InputTGLF{T}}; model_filename::String, uncertain::Bool=false, warn_nn_train_bounds::Bool, fidelity::Symbol=:TGLFNN) where {T<:Real}
+@with_pool pool function run_tglfnn(input_tglfs::Vector{InputTGLF{T}}; model_filename::String, uncertain::Bool=false, warn_nn_train_bounds::Bool, fidelity::Symbol=:TGLFNN) where {T<:Real}
     if occursin("stfpp", model_filename)
         for it in input_tglfs
             _apply_stfpp_transform!(it; dtf=0.5, device="")
         end
     end
-    if model_filename in ("sat3_em_d3d_azf-1",) && fidelity == :GKNN
+    if model_filename == "sat3_em_d3d_azf-1" && fidelity == :GKNN
         tglfmod = loadmodelonce(model_filename * "_tglfnn24")
     else
         tglfmod = loadmodelonce(model_filename)
     end
-    inputs = zeros(T, length(tglfmod.xnames), length(input_tglfs))
-    for (i, input_tglf) in enumerate(input_tglfs)
-        for (k, item) in enumerate(tglfmod.xnames)
-            if endswith(item, log_suffix)
-                subitem = SubString(item, firstindex(item), prevind(item, lastindex(item), n_log_suffix))
-                value = getfield(input_tglf, Symbol(subitem))
-            else
-                value = getfield(input_tglf, Symbol(item))
-            end
-            if ismissing(value)
-                hint = ""
-                if occursin("_5", item) || occursin("_6", item)
-                    hint = "\n\nHint: Missing species data (species 5). If using a TGLFNN model (e.g. 'stfpp' models), try setting:\n  act.ActorTGLF.lump_ions = false\nto ensure ion species are treated separately rather than lumped together."
-                end
-                error("TGLFNN input field '$(item)' is Missing at radial location $(i). Check that all required equilibrium and profile data are properly initialized.$(hint)")
-            end
-            inputs[k, i] = value
-        end
-    end
+
+    inputs = acquire!(pool, T, length(tglfmod.xnames), length(input_tglfs))
+
+    # Extract input fields using @generated function for zero-allocation
+    xnames_val = _get_xnames_without_log10_suffix(tglfmod)
+    _extract_all_inputs!(inputs, input_tglfs, xnames_val)  
+
     tmp = flux_array(tglfmod, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
     if fidelity == :GKNN
-        supported_gknn_models = ["sat3_em_d3d_azf-1", "sat3_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d_azf-1_withnegD", "sat3_em_d3d_azf-1_gkdb", "sat2_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d+mastu_azf-1"]
+        supported_gknn_models = ("sat3_em_d3d_azf-1", "sat3_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d_azf-1_withnegD", "sat3_em_d3d_azf-1_gkdb", "sat2_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d+mastu_azf-1")
         if !(model_filename in supported_gknn_models)
             error("GKNN fidelity is not supported for model '$model_filename'. Supported models are: $(join(supported_gknn_models, ", "))")
         end
-        if model_filename in ["sat3_em_d3d_azf-1"]
-            gknng = loadmodelonce(model_filename * "_gknng24")
-            err_g = flux_array(gknng, vcat(inputs, reshape(tmp[1, :], 1, :)); uncertain, warn_nn_train_bounds, fidelity)
-            tmp[1, :] .*= err_g[1, :]
-            gknnp = loadmodelonce(model_filename * "_gknnp24")
-            err_p = flux_array(gknnp, vcat(inputs, reshape(tmp[2, :], 1, :)); uncertain, warn_nn_train_bounds, fidelity)
-            tmp[2, :] .*= err_p[1, :]
-            gknne = loadmodelonce(model_filename * "_gknne24")
-            err_e = flux_array(gknne, vcat(inputs, reshape(tmp[3, :], 1, :)); uncertain, warn_nn_train_bounds, fidelity)
-            tmp[3, :] .*= err_e[1, :]
-            gknni = loadmodelonce(model_filename * "_gknni24")
-            err_i = flux_array(gknni, vcat(inputs, reshape(tmp[4, :], 1, :)); uncertain, warn_nn_train_bounds, fidelity)
-            tmp[4, :] .*= err_i[1, :]
+
+        if model_filename == "sat3_em_d3d_azf-1"
+            gk_inputs = acquire!(pool, T, size(inputs, 1) + 1, size(inputs, 2))
+            gk_inputs[1:end-1, :] = inputs
+
+            for (i, postfix) in enumerate(("_gknng24", "_gknnp24", "_gknne24", "_gknni24"))
+                gk_inputs[end, :] = tmp[i, :]
+                gknn_model = loadmodelonce(model_filename * postfix)
+                err = flux_array(gknn_model, gk_inputs; uncertain, warn_nn_train_bounds, fidelity)[:]
+                tmp[i, :] .*= err
+            end
         elseif model_filename in ("sat3_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d_azf-1_withnegD", "sat3_em_d3d_azf-1_gkdb", "sat2_em_d3d+mastu+nstx_azf-1")
+            gk_inputs = acquire!(pool, T, size(inputs, 1) + 4, size(inputs, 2))
+            gk_inputs[1:end-4, :] = inputs
+            gk_inputs[end-3:end, :] = tmp
+
             gknn = loadmodelonce(model_filename * "_gknn31")
-            err = flux_array(gknn, vcat(inputs, tmp); uncertain, warn_nn_train_bounds, fidelity)
+            err = flux_array(gknn, gk_inputs; uncertain, warn_nn_train_bounds, fidelity)
             tmp .*= err
-            if model_filename in ("sat3_em_d3d_azf-1_gkdb",)
+            if model_filename == "sat3_em_d3d_azf-1_gkdb"
+                gk_inputs[end-3:end, :] = tmp
                 gkdb = loadmodelonce(model_filename * "_gknn31_cgyro")
-                gkdb_err = flux_array(gkdb, vcat(inputs, tmp); uncertain, warn_nn_train_bounds, fidelity)
+                gkdb_err = flux_array(gkdb, gk_inputs; uncertain, warn_nn_train_bounds, fidelity)
                 tmp .*= gkdb_err
             end
-        elseif model_filename in ["sat3_em_d3d+mastu_azf-1"]
+        elseif model_filename == "sat3_em_d3d+mastu_azf-1"
+            gk_inputs = acquire!(pool, T, size(inputs, 1) + 4, size(inputs, 2))
+            gk_inputs[1:end-4, :] = inputs
+            gk_inputs[end-3:end, :] = tmp
+
             gknn = loadmodelonce(model_filename * "_gknn36")
-            err = flux_array(gknn, vcat(inputs, tmp); uncertain, warn_nn_train_bounds, fidelity)
+            err = flux_array(gknn, gk_inputs; uncertain, warn_nn_train_bounds, fidelity)
             tmp .*= err
         end
     end
-    sol = [flux_solution(tmp[:, i]...) for i in eachindex(input_tglfs)]
+
+    sol = [flux_solution(@view(tmp[:, i])) for i in eachindex(input_tglfs)]
     return sol
 end
 
@@ -508,7 +681,7 @@ function run_tglfnn(data::Dict; model_filename::String, uncertain::Bool=false, w
     if occursin("stfpp", model_filename)
         _apply_stfpp_transform!(data; dtf=0.5, device="")
     end
-    if model_filename in ("sat3_em_d3d_azf-1",) && fidelity == :GKNN
+    if model_filename == "sat3_em_d3d_azf-1" && fidelity == :GKNN
         tglfmod = loadmodelonce(model_filename * "_tglfnn24")
     else
         tglfmod = loadmodelonce(model_filename)
@@ -521,7 +694,7 @@ function run_tglfnn(data::Dict; model_filename::String, uncertain::Bool=false, w
         if !(model_filename in supported_gknn_models)
             error("GKNN fidelity is not supported for model '$model_filename'. Supported models are: $(join(supported_gknn_models, ", "))")
         end
-        if model_filename in ("sat3_em_d3d_azf-1",)
+        if model_filename == "sat3_em_d3d_azf-1"
             gknng = loadmodelonce(model_filename * "_gknng24")
             err_g = gknng(vcat(x, y[1])...; uncertain, warn_nn_train_bounds, fidelity)
             y[1] .*= err_g
@@ -538,12 +711,12 @@ function run_tglfnn(data::Dict; model_filename::String, uncertain::Bool=false, w
             gknn = loadmodelonce(model_filename * "_gknn31")
             err = gknn(vcat(x, y)...; uncertain, warn_nn_train_bounds, fidelity)
             y .*= err
-            if model_filename in ("sat3_em_d3d_azf-1_gkdb",)
+            if model_filename == "sat3_em_d3d_azf-1_gkdb"
                 gkdb = loadmodelonce(model_filename * "_gknn31_cgyro")
                 gkdb_err = gkdb(vcat(x, y)...; uncertain, warn_nn_train_bounds, fidelity)
                 y .*= gkdb_err
             end
-        elseif model_filename in ["sat3_em_d3d+mastu_azf-1"]
+        elseif model_filename == "sat3_em_d3d+mastu_azf-1"
             gknn = loadmodelonce(model_filename * "_gknn36")
             err = gknn(vcat(x, y)...; uncertain, warn_nn_train_bounds, fidelity)
             y .*= err
@@ -739,10 +912,14 @@ end
 
 """
     flux_solution(xx::Vararg{T}) where {T<:Real}
+    flux_solution(xx::AbstractVector{T}) where {T<:Real}
 
-Constructor used to handle PARTICLE_FLUX_i entered as a set of scalars instead of an array
+Construct a `FluxSolution` from scalar arguments or a vector.
+
+Accepts either variadic arguments (scalars) or an `AbstractVector`.
 
     flux_solution(1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
+    flux_solution([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
 
 results in
 
@@ -764,24 +941,29 @@ results in
     Γi = []
     Πi = 2.0
 """
-function flux_solution(xx::Vararg{T}) where {T<:Real}
+flux_solution(xx::Vararg{T}) where {T<:Real} = _flux_solution_impl(xx)
+flux_solution(xx::AbstractVector{T}) where {T<:Real} = _flux_solution_impl(xx)
+
+# Common implementation for both Vararg (Tuple) and AbstractVector
+@inline function _flux_solution_impl(xx)
+    T = eltype(xx)
     n_fields = length(xx)
     if n_fields == 4
         ENERGY_FLUX_e = 3
         ENERGY_FLUX_i = 4
         PARTICLE_FLUX_e = 1
         STRESS_TOR_i = 2
-        sol = GACODE.FluxSolution{T}(xx[ENERGY_FLUX_e], xx[ENERGY_FLUX_i], xx[PARTICLE_FLUX_e], T[], xx[STRESS_TOR_i])
+        return GACODE.FluxSolution{T}(xx[ENERGY_FLUX_e], xx[ENERGY_FLUX_i], xx[PARTICLE_FLUX_e], T[], xx[STRESS_TOR_i])
     else
         ENERGY_FLUX_e = n_fields - 1
         ENERGY_FLUX_i = n_fields
         PARTICLE_FLUX_e = 1
         PARTICLE_FLUX_i = 2:n_fields-3
         STRESS_TOR_i = n_fields - 2
-        sol = GACODE.FluxSolution{T}(xx[ENERGY_FLUX_e], xx[ENERGY_FLUX_i], xx[PARTICLE_FLUX_e], T[xx[i] for i in PARTICLE_FLUX_i], xx[STRESS_TOR_i])
+        return GACODE.FluxSolution{T}(xx[ENERGY_FLUX_e], xx[ENERGY_FLUX_i], xx[PARTICLE_FLUX_e], T[xx[i] for i in PARTICLE_FLUX_i], xx[STRESS_TOR_i])
     end
-    return sol
 end
+
 
 export run_tglfnn, run_tglfnn_onnx
 
