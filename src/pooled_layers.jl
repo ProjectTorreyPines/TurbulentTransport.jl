@@ -48,8 +48,16 @@ struct PooledActivation{F}
     σ::F
 end
 
-@inline function _pooled_activation_forward!(pa::PooledActivation, x::AbstractVecOrMat, pool)
+# Matrix path
+@inline function _pooled_activation_forward!(pa::PooledActivation, x::AbstractMatrix, pool)
     out = acquire!(pool, Float64, size(x))
+    out .= pa.σ.(x)
+    return out
+end
+
+# Vector path - acquires Vector directly (no vec() wrapper needed)
+@inline function _pooled_activation_forward!(pa::PooledActivation, x::AbstractVector, pool)
+    out = acquire!(pool, Float64, length(x))
     out .= pa.σ.(x)
     return out
 end
@@ -76,12 +84,23 @@ struct PooledDense{D<:Flux.Dense}
     dense::D
 end
 
-@inline function _pooled_dense_forward!(pd::PooledDense, x::AbstractVecOrMat, pool)
+# Matrix path
+@inline function _pooled_dense_forward!(pd::PooledDense, x::AbstractMatrix, pool)
     d = pd.dense
     Flux._size_check(d, x, 1 => size(d.weight, 2))
     xT = Flux._match_eltype(d, x)
     out = acquire!(pool, Float64, size(d.weight, 1), size(xT, 2))
     mul!(out, d.weight, xT)
+    return Flux.NNlib.bias_act!(d.σ, out, d.bias)
+end
+
+# Vector path - acquires Vector directly, uses BLAS gemv (more efficient)
+@inline function _pooled_dense_forward!(pd::PooledDense, x::AbstractVector, pool)
+    d = pd.dense
+    Flux._size_check(d, x, 1 => size(d.weight, 2))
+    xT = Flux._match_eltype(d, x)
+    out = acquire!(pool, Float64, size(d.weight, 1))  # Vector, not Matrix!
+    mul!(out, d.weight, xT)  # BLAS gemv
     return Flux.NNlib.bias_act!(d.σ, out, d.bias)
 end
 
@@ -145,9 +164,9 @@ This is an internal function used by `PooledChain` to optimize inference.
     return _pooled_dense_forward!(layer, x, pool)
 end
 
-# Vector input → Vector output (vec wrapper to match original behavior)
+# Vector input → Vector output (specialized path, no vec() needed)
 @inline function _forward_with_pool(layer::PooledDense, x::AbstractVector, pool)
-    return vec(_pooled_dense_forward!(layer, x, pool))
+    return _pooled_dense_forward!(layer, x, pool)
 end
 
 # Matrix input → Matrix output
@@ -155,9 +174,9 @@ end
     return _pooled_activation_forward!(layer, x, pool)
 end
 
-# Vector input → Vector output (vec wrapper to match original behavior)
+# Vector input → Vector output (specialized path, no vec() needed)
 @inline function _forward_with_pool(layer::PooledActivation, x::AbstractVector, pool)
-    return vec(_pooled_activation_forward!(layer, x, pool))
+    return _pooled_activation_forward!(layer, x, pool)
 end
 
 @inline function _forward_with_pool(layer::PooledParallelAdd, x, pool)
