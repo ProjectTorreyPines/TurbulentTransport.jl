@@ -620,7 +620,92 @@ Returns a vector of `flux_solution` structures
     xnames_val = _get_xnames_without_log10_suffix(tglfmod)
     _extract_all_inputs!(inputs, input_tglfs, xnames_val)  
 
-    tmp = flux_array(tglfmod, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
+    # Handle models with radial-dependent variants
+    if model_filename in ("sat0quench_em_d3d_azf+1_withnegD", "sat1_em_d3d_azf-1_withnegD", "sat2_em_d3d_azf-1_withnegD", "sat3_em_d3d_azf-1_withnegD")
+        tmp = flux_array(tglfmod, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
+        
+        # Find the index of RMIN_LOC for radial-dependent model selection
+        k_rminloc = nothing
+        for (k, item) in enumerate(tglfmod.xnames)
+            if item == "RMIN_LOC"
+                k_rminloc = k
+                break
+            end
+        end
+        
+        if k_rminloc === nothing
+            @warn "RMIN_LOC not found in xnames for radial-dependent model blending"
+        else
+            # Load additional models for edge regions
+            tglfmod2 = loadmodelonce(replace(model_filename, "d3d" => "d3dnearedge"))
+            tglfmod3 = loadmodelonce(replace(model_filename, "d3d" => "d3dedge"))
+
+            tmp2 = flux_array(tglfmod2, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
+            tmp3 = flux_array(tglfmod3, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
+
+            for i in eachindex(input_tglfs)
+                rmin = inputs[k_rminloc, i]
+                
+                if rmin >= 0.68 && rmin < 0.881
+                    # Overlap region: all three models, select by smallest relative error
+                    for k in axes(tmp, 1)
+                        threshold = k == 1 ? 0.03 : 0.3
+                        
+                        # Extract values and uncertainties directly
+                        val1 = abs(Measurements.value(tmp[k, i]))
+                        val2 = abs(Measurements.value(tmp2[k, i]))
+                        val3 = abs(Measurements.value(tmp3[k, i]))
+                        unc1 = Measurements.uncertainty(tmp[k, i])
+                        unc2 = Measurements.uncertainty(tmp2[k, i])
+                        unc3 = Measurements.uncertainty(tmp3[k, i])
+                        
+                        # Compute errors directly without allocating arrays
+                        err1 = abs(unc1 / (val1 + threshold))
+                        err2 = abs(unc2 / (val2 + threshold))
+                        err3 = abs(unc3 / (val3 + threshold))
+                        
+                        # Find minimum and assign without argmin
+                        if err2 < err1 && err2 < err3
+                            tmp[k, i] = tmp2[k, i]
+                        elseif err3 < err1
+                            tmp[k, i] = tmp3[k, i]
+                        end
+                        # If err1 is smallest, keep tmp[k, i] as-is
+                    end
+                    
+                elseif rmin >= 0.881 && rmin < 0.975
+                    # Overlap region: d3dnearedge (tmp2) or d3dedge (tmp3), select by smallest relative error
+                    for k in axes(tmp, 1)
+                        threshold = k == 1 ? 0.03 : 0.3
+                        
+                        # Extract values and uncertainties directly
+                        val2 = abs(Measurements.value(tmp2[k, i]))
+                        val3 = abs(Measurements.value(tmp3[k, i]))
+                        unc2 = Measurements.uncertainty(tmp2[k, i])
+                        unc3 = Measurements.uncertainty(tmp3[k, i])
+                        
+                        # Compute errors directly without allocating arrays
+                        err2 = abs(unc2 / (val2 + threshold))
+                        err3 = abs(unc3 / (val3 + threshold))
+                        
+                        # Compare and assign
+                        if err2 < err3
+                            tmp[k, i] = tmp2[k, i]
+                        else
+                            tmp[k, i] = tmp3[k, i]
+                        end
+                    end
+                    
+                elseif rmin >= 0.975
+                    # Edge only: d3dedge
+                    tmp[:, i] .= tmp3[:, i]
+                end
+                # rmin < 0.68: keep tmp (d3d) as-is
+            end
+        end
+    else
+        tmp = flux_array(tglfmod, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
+    end
     if fidelity == :GKNN
         supported_gknn_models = ("sat3_em_d3d_azf-1", "sat3_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d_azf-1_withnegD", "sat3_em_d3d_azf-1_gkdb", "sat2_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d+mastu_azf-1")
         if !(model_filename in supported_gknn_models)

@@ -256,3 +256,129 @@ end
         @test isempty(result)
     end
 end
+
+@testset "run_tglfnn radial-dependent models" begin
+    # Test models with radial-dependent blending (d3d, d3dnearedge, d3dedge variants)
+    radial_models = (
+        "sat0quench_em_d3d_azf+1_withnegD",
+        "sat1_em_d3d_azf-1_withnegD",
+        "sat2_em_d3d_azf-1_withnegD",
+        "sat3_em_d3d_azf-1_withnegD"
+    )
+
+    @testset "Model: $model_name" for model_name in radial_models
+        # Create test inputs with different RMIN_LOC values covering all radial regions
+        input_core = load_sample_input()  # rmin ~ 0.573 (< 0.68, core region)
+        TurbulentTransport.apply_presets!(input_core)
+        
+        input_overlap1 = deepcopy(input_core)
+        input_overlap1.RMIN_LOC = 0.75  # 0.68 <= rmin < 0.881 (overlap: all three models)
+        
+        input_overlap2 = deepcopy(input_core)
+        input_overlap2.RMIN_LOC = 0.92  # 0.881 <= rmin < 0.975 (overlap: nearedge & edge)
+        
+        input_edge = deepcopy(input_core)
+        input_edge.RMIN_LOC = 0.98  # rmin >= 0.975 (edge only)
+
+        @testset "Single input - core region (rmin < 0.68)" begin
+            result = TurbulentTransport.run_tglfnn(
+                input_core;
+                model_filename=model_name,
+                warn_nn_train_bounds=false
+            )
+            @test result isa FluxSolution
+            @test isfinite(result.ENERGY_FLUX_e)
+            @test isfinite(result.ENERGY_FLUX_i)
+            @test isfinite(result.PARTICLE_FLUX_e)
+            @test isfinite(result.STRESS_TOR_i)
+        end
+
+        @testset "Single input - overlap region 1 (0.68 <= rmin < 0.881)" begin
+            result = TurbulentTransport.run_tglfnn(
+                input_overlap1;
+                model_filename=model_name,
+                warn_nn_train_bounds=false
+            )
+            @test result isa FluxSolution
+            @test isfinite(result.ENERGY_FLUX_e)
+            @test isfinite(result.ENERGY_FLUX_i)
+            @test isfinite(result.PARTICLE_FLUX_e)
+            @test isfinite(result.STRESS_TOR_i)
+        end
+
+        @testset "Single input - overlap region 2 (0.881 <= rmin < 0.975)" begin
+            result = TurbulentTransport.run_tglfnn(
+                input_overlap2;
+                model_filename=model_name,
+                warn_nn_train_bounds=false
+            )
+            @test result isa FluxSolution
+            @test isfinite(result.ENERGY_FLUX_e)
+            @test isfinite(result.ENERGY_FLUX_i)
+            @test isfinite(result.PARTICLE_FLUX_e)
+            @test isfinite(result.STRESS_TOR_i)
+        end
+
+        @testset "Single input - edge region (rmin >= 0.975)" begin
+            result = TurbulentTransport.run_tglfnn(
+                input_edge;
+                model_filename=model_name,
+                warn_nn_train_bounds=false
+            )
+            @test result isa FluxSolution
+            @test isfinite(result.ENERGY_FLUX_e)
+            @test isfinite(result.ENERGY_FLUX_i)
+            @test isfinite(result.PARTICLE_FLUX_e)
+            @test isfinite(result.STRESS_TOR_i)
+        end
+
+        @testset "Batch input - multiple radial regions" begin
+            inputs = [input_core, input_overlap1, input_overlap2, input_edge]
+            results = TurbulentTransport.run_tglfnn(
+                inputs;
+                model_filename=model_name,
+                warn_nn_train_bounds=false
+            )
+            
+            @test results isa Vector
+            @test length(results) == 4
+            @test all(r -> r isa FluxSolution, results)
+            
+            # Check that all flux values are finite
+            for result in results
+                @test isfinite(result.ENERGY_FLUX_e)
+                @test isfinite(result.ENERGY_FLUX_i)
+                @test isfinite(result.PARTICLE_FLUX_e)
+                @test isfinite(result.STRESS_TOR_i)
+            end
+        end
+
+        @testset "Batch vs single equivalence" begin
+            inputs = [input_core, input_overlap1, input_overlap2, input_edge]
+            
+            # Run individually
+            single_results = [
+                TurbulentTransport.run_tglfnn(
+                    input;
+                    model_filename=model_name,
+                    warn_nn_train_bounds=false
+                ) for input in inputs
+            ]
+            
+            # Run as batch
+            batch_results = TurbulentTransport.run_tglfnn(
+                inputs;
+                model_filename=model_name,
+                warn_nn_train_bounds=false
+            )
+            
+            # Compare results (allow for floating-point precision differences)
+            for (single, batch) in zip(single_results, batch_results)
+                @test single.ENERGY_FLUX_e ≈ batch.ENERGY_FLUX_e rtol=1e-12
+                @test single.ENERGY_FLUX_i ≈ batch.ENERGY_FLUX_i rtol=1e-12
+                @test single.PARTICLE_FLUX_e ≈ batch.PARTICLE_FLUX_e rtol=1e-12
+                @test single.STRESS_TOR_i ≈ batch.STRESS_TOR_i rtol=1e-12
+            end
+        end
+    end
+end
