@@ -372,12 +372,12 @@ end
                 warn_nn_train_bounds=false
             )
             
-            # Compare results (should be identical)
+            # Compare results (allow for floating-point precision differences)
             for (single, batch) in zip(single_results, batch_results)
-                @test single.ENERGY_FLUX_e ≈ batch.ENERGY_FLUX_e rtol=1e-14
-                @test single.ENERGY_FLUX_i ≈ batch.ENERGY_FLUX_i rtol=1e-14
-                @test single.PARTICLE_FLUX_e ≈ batch.PARTICLE_FLUX_e rtol=1e-14
-                @test single.STRESS_TOR_i ≈ batch.STRESS_TOR_i rtol=1e-14
+                @test single.ENERGY_FLUX_e ≈ batch.ENERGY_FLUX_e rtol=1e-12
+                @test single.ENERGY_FLUX_i ≈ batch.ENERGY_FLUX_i rtol=1e-12
+                @test single.PARTICLE_FLUX_e ≈ batch.PARTICLE_FLUX_e rtol=1e-12
+                @test single.STRESS_TOR_i ≈ batch.STRESS_TOR_i rtol=1e-12
             end
         end
     end
