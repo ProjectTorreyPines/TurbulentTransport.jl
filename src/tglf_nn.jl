@@ -1072,6 +1072,9 @@ Core implementation of model selector that works with InputTGLF vectors.
 - Automatically skips models with "gknn", "qlnn", or "edge" in their name (these are correction/specialized models, not standalone models)
 """
 function _model_selector_core(input_tglfs::Vector{InputTGLF{T}}, rho_values::Union{Vector,Nothing}; max_models::Int=3, filter_sat_rule::Union{Symbol,Nothing}=nothing, electromagnetic::Bool=true, verbose::Bool=true) where T
+    # Make a copy to prevent in-place modifications by stfpp/tefpp models
+    input_tglfs = deepcopy(input_tglfs)
+
     # Get all available models and apply filters
     all_models = available_models()
 
@@ -1160,7 +1163,7 @@ function _model_selector_core(input_tglfs::Vector{InputTGLF{T}}, rho_values::Uni
         ))
 
         if verbose
-            println("\nTop $n_top models at ρ=$(round(rho, digits=3)):")
+            println("\nTop $n_top models at RMIN_LOC=$(round(rho, digits=3)):")
             for (i, (name, conf, _)) in enumerate(model_confidences[1:n_top])
                 println("  $i. $name ($(round(conf, digits=4)))")
             end
@@ -1321,7 +1324,7 @@ function model_selector(dd::IMAS.dd;
 end
 
 """
-    model_selector(input_tglfs::Vector{InputTGLF{T}}; rho_values=nothing, filter_sat_rule=:sat3, electromagnetic=true, max_models=3, verbose=true) where T
+    model_selector(input_tglfs::Vector{InputTGLF{T}}; filter_sat_rule=:sat3, electromagnetic=true, max_models=3, verbose=true) where T
 
 Select the most confident TGLF-NN models for a vector of InputTGLF objects.
 
@@ -1332,18 +1335,17 @@ This function:
 4. Returns the top `max_models` most confident models for each input
 
 # Arguments
-- `input_tglfs::Vector{InputTGLF{T}}`: Vector of InputTGLF structures
-- `rho_values`: Optional vector of rho values for labeling (default: nothing, uses indices)
+- `input_tglfs::Vector{InputTGLF{T}}`: Vector of InputTGLF structures (already contain all radial location info)
 - `filter_sat_rule::Union{Symbol,Nothing}`: Filter models by saturation rule. Default is :sat3. Set to :all to test all models. (default: :sat3)
 - `electromagnetic::Bool`: Filter to electromagnetic (true, default) or electrostatic (false) models
 - `max_models::Int`: Number of top models to return per input (default: 3)
 - `verbose::Bool`: Print progress information (default: true)
 
 # Returns
-Same structure as the String-based method (see [`model_selector(::String)`](@ref))
+Same structure as the String-based method (see [`model_selector(::String)`](@ref)).
 
 # Example
-```julia
+#=julia
 using TurbulentTransport, IMAS
 
 # Pre-generate InputTGLF structures with sat3
@@ -1351,35 +1353,34 @@ dd = IMAS.json2imas("/path/to/ods.json")
 rho_grid = [0.3, 0.5, 0.7]
 input_tglfs = InputTGLF(dd, rho_grid, :sat3, true, false)
 
-# Run model selector - filters to sat3 models (matching InputTGLF)
-results = model_selector(input_tglfs; rho_values=rho_grid)
+# Run model selector
+results = model_selector(input_tglfs)
 
-# Or if your inputs were generated with sat1, filter to sat1
+# Or filter to sat1 models
 input_tglfs_sat1 = InputTGLF(dd, rho_grid, :sat1, true, false)
 results = model_selector(input_tglfs_sat1; filter_sat_rule=:sat1)
-```
+=#
 """
 function model_selector(input_tglfs::Vector{InputTGLF{T}};
-                       rho_values=nothing,
                        filter_sat_rule::Union{Symbol,Nothing}=:sat3,
                        electromagnetic::Bool=true,
                        max_models::Int=3,
                        verbose::Bool=true) where T
 
     verbose && println("Analyzing $(length(input_tglfs)) InputTGLF objects\n")
+    rho_values = [inp.RMIN_LOC for inp in input_tglfs]
     return _model_selector_core(input_tglfs, rho_values; max_models, filter_sat_rule, electromagnetic, verbose)
 end
 
 """
-    model_selector(input_tglf::InputTGLF{T}; rho_value=nothing, filter_sat_rule=:sat3, electromagnetic=true, max_models=3, verbose=true) where T
+    model_selector(input_tglf::InputTGLF{T}; filter_sat_rule=:sat3, electromagnetic=true, max_models=3, verbose=true) where T
 
 Select the most confident TGLF-NN models for a single InputTGLF object.
 
 Convenience method that wraps a single InputTGLF in a vector and extracts the single ranking result.
 
 # Arguments
-- `input_tglf::InputTGLF{T}`: Single InputTGLF structure
-- `rho_value`: Optional rho value for labeling (default: nothing, uses index 1)
+- `input_tglf::InputTGLF{T}`: Single InputTGLF structure (already contains all radial location info)
 - `filter_sat_rule::Union{Symbol,Nothing}`: Filter models by saturation rule. Default is :sat3. Set to :all to test all models. (default: :sat3)
 - `electromagnetic::Bool`: Filter to electromagnetic (true, default) or electrostatic (false) models
 - `max_models::Int`: Number of top models to return (default: 3)
@@ -1395,37 +1396,30 @@ A NamedTuple with:
 - `all_results`: Dict mapping model_name => (success, result/error) for all models
 
 # Example
-```julia
+#=julia
 using TurbulentTransport, IMAS
 
 # Create a single InputTGLF with sat3
 dd = IMAS.json2imas("/path/to/ods.json")
 input_tglf = InputTGLF(dd, [0.5], :sat3, true, false)[1]
 
-# Find best sat3 models (matches InputTGLF sat rule)
-result = model_selector(input_tglf; rho_value=0.5)
-
-# Or if your input was sat1, filter to sat1
-input_tglf_sat1 = InputTGLF(dd, [0.5], :sat1, true, false)[1]
-result = model_selector(input_tglf_sat1; rho_value=0.5, filter_sat_rule=:sat1)
+# Find best models
+result = model_selector(input_tglf)
 
 println("Top model: \$(result.top_models[1])")
 println("Confidence: \$(result.confidences[1])")
-```
+=#
 """
 function model_selector(input_tglf::InputTGLF{T};
-                       rho_value=nothing,
                        filter_sat_rule::Union{Symbol,Nothing}=:sat3,
                        electromagnetic::Bool=true,
                        max_models::Int=3,
                        verbose::Bool=true) where T
 
     verbose && println("Analyzing single InputTGLF\n")
-
-    rho_values = rho_value === nothing ? nothing : [rho_value]
+    rho_values = [input_tglf.RMIN_LOC]
     full_results = _model_selector_core([input_tglf], rho_values; max_models, filter_sat_rule, electromagnetic, verbose)
 
-    # Return simplified result (single ranking extracted)
     ranking = full_results.rankings[1]
     return (rho=ranking.rho, top_models=ranking.top_models, confidences=ranking.confidences,
             flux_outputs=ranking.flux_outputs, input_tglf=input_tglf, all_results=full_results.all_results)
