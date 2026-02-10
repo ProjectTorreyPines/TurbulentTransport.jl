@@ -280,7 +280,7 @@ Processes `[N_features, M_samples]` matrix through the model and writes results 
 
     # unsafe_acquire! returns Array (not ReshapedArray) to avoid boxing with non-concrete _pooled_chain
     xx = unsafe_acquire!(pool, T, size(x))
-    
+
     # Apply log10 transform where needed (determined by feature name)
     @inbounds for i in 1:N
         if contains(fluxmodel.xnames[i], log_suffix)
@@ -618,12 +618,12 @@ Returns a vector of `flux_solution` structures
 
     # Extract input fields using @generated function for zero-allocation
     xnames_val = _get_xnames_without_log10_suffix(tglfmod)
-    _extract_all_inputs!(inputs, input_tglfs, xnames_val)  
+    _extract_all_inputs!(inputs, input_tglfs, xnames_val)
 
     # Handle models with radial-dependent variants
     if model_filename in ("sat0quench_em_d3d_azf+1_withnegD", "sat1_em_d3d_azf-1_withnegD", "sat2_em_d3d_azf-1_withnegD", "sat3_em_d3d_azf-1_withnegD")
         tmp = flux_array(tglfmod, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
-        
+
         # Find the index of RMIN_LOC for radial-dependent model selection
         k_rminloc = nothing
         for (k, item) in enumerate(tglfmod.xnames)
@@ -632,7 +632,7 @@ Returns a vector of `flux_solution` structures
                 break
             end
         end
-        
+
         if k_rminloc === nothing
             @warn "RMIN_LOC not found in xnames for radial-dependent model blending"
         else
@@ -645,12 +645,12 @@ Returns a vector of `flux_solution` structures
 
             for i in eachindex(input_tglfs)
                 rmin = inputs[k_rminloc, i]
-                
+
                 if rmin >= 0.68 && rmin < 0.881
                     # Overlap region: all three models, select by smallest relative error
                     for k in axes(tmp, 1)
                         threshold = k == 1 ? 0.03 : 0.3
-                        
+
                         # Extract values and uncertainties directly
                         val1 = abs(Measurements.value(tmp[k, i]))
                         val2 = abs(Measurements.value(tmp2[k, i]))
@@ -658,12 +658,12 @@ Returns a vector of `flux_solution` structures
                         unc1 = Measurements.uncertainty(tmp[k, i])
                         unc2 = Measurements.uncertainty(tmp2[k, i])
                         unc3 = Measurements.uncertainty(tmp3[k, i])
-                        
+
                         # Compute errors directly without allocating arrays
                         err1 = abs(unc1 / (val1 + threshold))
                         err2 = abs(unc2 / (val2 + threshold))
                         err3 = abs(unc3 / (val3 + threshold))
-                        
+
                         # Find minimum and assign without argmin
                         if err2 < err1 && err2 < err3
                             tmp[k, i] = tmp2[k, i]
@@ -672,22 +672,22 @@ Returns a vector of `flux_solution` structures
                         end
                         # If err1 is smallest, keep tmp[k, i] as-is
                     end
-                    
+
                 elseif rmin >= 0.881 && rmin < 0.975
                     # Overlap region: d3dnearedge (tmp2) or d3dedge (tmp3), select by smallest relative error
                     for k in axes(tmp, 1)
                         threshold = k == 1 ? 0.03 : 0.3
-                        
+
                         # Extract values and uncertainties directly
                         val2 = abs(Measurements.value(tmp2[k, i]))
                         val3 = abs(Measurements.value(tmp3[k, i]))
                         unc2 = Measurements.uncertainty(tmp2[k, i])
                         unc3 = Measurements.uncertainty(tmp3[k, i])
-                        
+
                         # Compute errors directly without allocating arrays
                         err2 = abs(unc2 / (val2 + threshold))
                         err3 = abs(unc3 / (val3 + threshold))
-                        
+
                         # Compare and assign
                         if err2 < err3
                             tmp[k, i] = tmp2[k, i]
@@ -695,7 +695,7 @@ Returns a vector of `flux_solution` structures
                             tmp[k, i] = tmp3[k, i]
                         end
                     end
-                    
+
                 elseif rmin >= 0.975
                     # Edge only: d3dedge
                     tmp[:, i] .= tmp3[:, i]
@@ -1050,7 +1050,380 @@ flux_solution(xx::AbstractVector{T}) where {T<:Real} = _flux_solution_impl(xx)
 end
 
 
-export run_tglfnn, run_tglfnn_onnx
+export run_tglfnn, run_tglfnn_onnx, model_selector
+
+# ------------------------------------------------------------
+# Model Selector - Core Implementation
+# ------------------------------------------------------------
+
+# Helper to unwrap InputTGLFs wrapper object
+_unwrap_input_tglfs(result) = hasproperty(result, :tglfs) ? getfield(result, :tglfs) : result
+
+"""
+    _model_selector_core(input_tglfs::Vector{InputTGLF{T}}, rho_values::Union{Vector,Nothing}; max_models::Int=3, filter_sat_rule::Union{Symbol,Nothing}=nothing, electromagnetic::Bool=true, verbose::Bool=true) where T
+
+Core implementation of model selector that works with InputTGLF vectors.
+
+# Arguments
+- `filter_sat_rule`: Optional saturation rule filter (e.g., :sat1). If provided, only models matching this sat rule are tested.
+- `electromagnetic`: Filter to electromagnetic (true, default) or electrostatic (false) models
+
+# Notes
+- Automatically skips models with "gknn", "qlnn", or "edge" in their name (these are correction/specialized models, not standalone models)
+"""
+function _model_selector_core(input_tglfs::Vector{InputTGLF{T}}, rho_values::Union{Vector,Nothing}; max_models::Int=3, filter_sat_rule::Union{Symbol,Nothing}=nothing, electromagnetic::Bool=true, verbose::Bool=true) where T
+    # Make a copy to prevent in-place modifications by stfpp/tefpp models
+    input_tglfs = deepcopy(input_tglfs)
+
+    # Get all available models and apply filters
+    all_models = available_models()
+
+    # Skip correction/specialized models
+    all_models = filter(m -> !occursin("gknn", m) && !occursin("qlnn", m) && !occursin("edge", m), all_models)
+
+    # Filter by electromagnetic vs electrostatic
+    physics_str = electromagnetic ? "_em_" : "_es_"
+    all_models = filter(m -> occursin(physics_str, m), all_models)
+
+    # Filter by saturation rule if specified (unless :all)
+    if filter_sat_rule !== nothing && filter_sat_rule != :all
+        sat_str = string(filter_sat_rule)
+        all_models = filter(m -> startswith(m, sat_str), all_models)
+    end
+
+    # Print filtering summary
+    if verbose
+        physics_type = electromagnetic ? "electromagnetic" : "electrostatic"
+        println("Physics: $physics_type")
+        if filter_sat_rule !== nothing && filter_sat_rule != :all
+            println("Saturation rule: $(filter_sat_rule)")
+        end
+        println("Testing $(length(all_models)) models\n")
+    end
+
+    # Run all models and collect results
+    all_results = Dict{String, Tuple{Bool, Any}}()
+
+    for (idx, model_name) in enumerate(all_models)
+        verbose && (idx == 1 || idx % 10 == 0) && println("  Model $idx/$(length(all_models)): $model_name")
+
+        try
+            flux_sols = run_tglfnn(input_tglfs;
+                                  model_filename=model_name,
+                                  uncertain=true,
+                                  warn_nn_train_bounds=false,
+                                  fidelity=:TGLFNN)
+            all_results[model_name] = (true, flux_sols)
+        catch e
+            all_results[model_name] = (false, e)
+            verbose && println("    ⚠ $model_name failed: $(typeof(e))")
+        end
+    end
+
+    successful_models = [name for (name, (success, _)) in all_results if success]
+    verbose && println("\nCompleted: $(length(successful_models))/$(length(all_models)) models successful\n")
+
+    # Rank models at each rho location
+    rho_vec = rho_values === nothing ? collect(1:length(input_tglfs)) : rho_values
+    rankings = []
+
+    for (rho_idx, rho) in enumerate(rho_vec)
+        # Compute confidence for each successful model
+        model_confidences = []
+
+        for model_name in successful_models
+            flux_sol = all_results[model_name][2][rho_idx]
+
+            # Compute average confidence across all fluxes
+            # Metric: relative uncertainty = unc / (|value| + threshold)
+            fluxes = [flux_sol.PARTICLE_FLUX_e, flux_sol.ENERGY_FLUX_e,
+                      flux_sol.ENERGY_FLUX_i, flux_sol.STRESS_TOR_i]
+            thresholds = [0.03, 0.3, 0.3, 0.3]
+
+            confidence = 0.0
+            for (flux, thresh) in zip(fluxes, thresholds)
+                val = abs(Measurements.value(flux))
+                unc = Measurements.uncertainty(flux)
+                confidence += abs(unc / (val + thresh))
+            end
+            confidence /= length(fluxes)
+
+            push!(model_confidences, (model_name, confidence, flux_sol))
+        end
+
+        # Sort by confidence (lower is better) and take top N
+        sort!(model_confidences, by=x->x[2])
+        n_top = min(max_models, length(model_confidences))
+
+        push!(rankings, (
+            rho=rho,
+            top_models=[mc[1] for mc in model_confidences[1:n_top]],
+            confidences=[mc[2] for mc in model_confidences[1:n_top]],
+            flux_outputs=[mc[3] for mc in model_confidences[1:n_top]]
+        ))
+
+        if verbose
+            println("\nTop $n_top models at RMIN_LOC=$(round(rho, digits=3)):")
+            for (i, (name, conf, _)) in enumerate(model_confidences[1:n_top])
+                println("  $i. $name ($(round(conf, digits=4)))")
+            end
+        end
+    end
+
+    return (
+        rho_grid=rho_vec,
+        rankings=rankings,
+        input_tglfs=input_tglfs,
+        all_results=all_results
+    )
+end
+
+# ------------------------------------------------------------
+# Model Selector - Public API with Multiple Dispatch
+# ------------------------------------------------------------
+
+"""
+    model_selector(ods_path::String; rho_grid=range(0.1, 0.9, 9), electromagnetic=true, lump_ions=false, sat_rule=:sat3, filter_sat_rule=nothing, max_models=3, verbose=true)
+
+Select the most confident TGLF-NN models for a given ODS file across a radial grid.
+
+This function:
+1. Loads an ODS (IMAS data structure) from the given path
+2. Generates InputTGLF files for the specified rho grid
+3. Runs available TGLF-NN models (with graceful failure handling)
+4. Ranks models by confidence using the relative uncertainty metric
+5. Returns the top `max_models` most confident models for each rho location
+
+Note: Automatically skips "gknn", "qlnn", and "edge" models (correction/specialized models, not standalone)
+
+# Arguments
+- `ods_path::String`: Path to the ODS file (JSON or IMAS format)
+- `rho_grid`: Radial grid points - can be a range, array, tuple, or single value (default: range(0.1, 0.9, 9))
+- `electromagnetic::Bool`: Use electromagnetic (true, default) vs electrostatic (false). Controls both InputTGLF generation and model filtering.
+- `lump_ions::Bool`: Lump ion species together (default: false)
+- `sat_rule::Symbol`: Saturation rule for InputTGLF generation (default: :sat3)
+- `filter_sat_rule::Union{Symbol,Nothing}`: Filter models by saturation rule. By default (nothing), automatically matches `sat_rule`. Set to a specific symbol (e.g., :sat1) to override, or set to :all to test all models. (default: nothing, auto-matches sat_rule)
+- `max_models::Int`: Number of top models to return per rho (default: 3)
+- `verbose::Bool`: Print progress information (default: true)
+
+# Returns
+A NamedTuple with:
+- `rho_grid`: The radial grid used
+- `rankings`: Vector of NamedTuples (one per rho) containing:
+  - `rho`: The rho value
+  - `top_models`: Vector of model names (most confident first)
+  - `confidences`: Vector of confidence scores (lower is better)
+  - `flux_outputs`: Vector of flux solutions for top models
+- `input_tglfs`: Vector of InputTGLF structures used
+- `all_results`: Dict mapping model_name => (success, result/error) for all models
+
+# Example
+```julia
+using TurbulentTransport, IMAS
+
+# Load and analyze an ODS file - defaults to sat3, auto-matches filter to sat3
+results = model_selector("/path/to/ods.json"; rho_grid=range(0.1, 0.9, 9))
+
+# Single radial location (scalar, array, or tuple all work)
+results = model_selector("/path/to/ods.json"; rho_grid=0.5)
+results = model_selector("/path/to/ods.json"; rho_grid=[0.5])
+results = model_selector("/path/to/ods.json"; rho_grid=(0.5,))
+
+# Use sat1 - filter automatically matches
+results = model_selector("/path/to/ods.json"; sat_rule=:sat1)
+
+# Test all models regardless of sat rule
+results = model_selector("/path/to/ods.json"; filter_sat_rule=:all)
+
+# Check top models at first rho location
+println("Top models at ρ=\$(results.rankings[1].rho):")
+for (i, (model, conf)) in enumerate(zip(results.rankings[1].top_models, results.rankings[1].confidences))
+    println("  \$i. \$model (confidence: \$(round(conf, digits=4)))")
+end
+```
+"""
+function model_selector(ods_path::String;
+                       rho_grid=range(0.1, 0.9, 9),
+                       electromagnetic::Bool=true,
+                       lump_ions::Bool=false,
+                       sat_rule::Symbol=:sat3,
+                       filter_sat_rule::Union{Symbol,Nothing}=nothing,
+                       max_models::Int=3,
+                       verbose::Bool=true)
+
+    verbose && println("Loading ODS from: $ods_path")
+    dd = IMAS.json2imas(ods_path; error_on_missing_coordinates=false, show_warnings=false)
+
+    # Convert rho_grid to vector (handles scalar, tuple, range, etc.)
+    rho_vec = rho_grid isa Number ? [Float64(rho_grid)] : collect(rho_grid)
+
+    verbose && println("Generating InputTGLF for $(length(rho_vec)) radial locations\n")
+    input_tglfs = _unwrap_input_tglfs(InputTGLF(dd, rho_vec, sat_rule, electromagnetic, lump_ions))
+
+    # Auto-match filter_sat_rule to sat_rule if not specified
+    effective_filter = filter_sat_rule === nothing ? sat_rule : filter_sat_rule
+
+    return _model_selector_core(input_tglfs, rho_vec; max_models, filter_sat_rule=effective_filter, electromagnetic, verbose)
+end
+
+"""
+    model_selector(dd::IMAS.dd; rho_grid=range(0.1, 0.9, 9), electromagnetic=true, lump_ions=false, sat_rule=:sat3, filter_sat_rule=nothing, max_models=3, verbose=true)
+
+Select the most confident TGLF-NN models for a given IMAS data structure across a radial grid.
+
+Similar to the String path method, but takes an already-loaded IMAS.dd object (e.g., from FUSE initialization).
+
+Note: Automatically skips "gknn", "qlnn", and "edge" models (correction/specialized models, not standalone)
+
+# Arguments
+- `dd::IMAS.dd`: IMAS data structure (already loaded/initialized)
+- `rho_grid`: Radial grid points - can be a range, array, tuple, or single value (default: range(0.1, 0.9, 9))
+- `electromagnetic::Bool`: Use electromagnetic (true, default) vs electrostatic (false). Controls both InputTGLF generation and model filtering.
+- `lump_ions::Bool`: Lump ion species together (default: false)
+- `sat_rule::Symbol`: Saturation rule for InputTGLF generation (default: :sat3)
+- `filter_sat_rule::Union{Symbol,Nothing}`: Filter models by saturation rule. By default (nothing), automatically matches `sat_rule`. Set to a specific symbol (e.g., :sat1) to override, or set to :all to test all models. (default: nothing, auto-matches sat_rule)
+- `max_models::Int`: Number of top models to return per rho (default: 3)
+- `verbose::Bool`: Print progress information (default: true)
+
+# Returns
+Same structure as the String-based method (see [`model_selector(::String)`](@ref))
+
+# Example
+```julia
+using TurbulentTransport, IMAS, FUSE
+
+# Initialize with FUSE
+ini, act = FUSE.case_parameters(:D3D, :L_mode)
+dd = IMAS.dd()
+FUSE.init(dd, ini, act)
+
+# Run model selector on the initialized dd
+results = model_selector(dd; rho_grid=[0.3, 0.5, 0.7])
+
+# Or use different sat rule
+results = model_selector(dd; rho_grid=0.5, sat_rule=:sat1)
+```
+"""
+function model_selector(dd::IMAS.dd;
+                       rho_grid=range(0.1, 0.9, 9),
+                       electromagnetic::Bool=true,
+                       lump_ions::Bool=false,
+                       sat_rule::Symbol=:sat3,
+                       filter_sat_rule::Union{Symbol,Nothing}=nothing,
+                       max_models::Int=3,
+                       verbose::Bool=true)
+
+    rho_vec = rho_grid isa Number ? [Float64(rho_grid)] : collect(rho_grid)
+
+    verbose && println("Generating InputTGLF for $(length(rho_vec)) radial locations\n")
+    input_tglfs = _unwrap_input_tglfs(InputTGLF(dd, rho_vec, sat_rule, electromagnetic, lump_ions))
+
+    effective_filter = filter_sat_rule === nothing ? sat_rule : filter_sat_rule
+
+    return _model_selector_core(input_tglfs, rho_vec; max_models, filter_sat_rule=effective_filter, electromagnetic, verbose)
+end
+
+"""
+    model_selector(input_tglfs::Vector{InputTGLF{T}}; filter_sat_rule=:sat3, electromagnetic=true, max_models=3, verbose=true) where T
+
+Select the most confident TGLF-NN models for a vector of InputTGLF objects.
+
+This function:
+1. Takes pre-generated InputTGLF objects
+2. Runs available TGLF-NN models (with graceful failure handling)
+3. Ranks models by confidence using the relative uncertainty metric
+4. Returns the top `max_models` most confident models for each input
+
+# Arguments
+- `input_tglfs::Vector{InputTGLF{T}}`: Vector of InputTGLF structures (already contain all radial location info)
+- `filter_sat_rule::Union{Symbol,Nothing}`: Filter models by saturation rule. Default is :sat3. Set to :all to test all models. (default: :sat3)
+- `electromagnetic::Bool`: Filter to electromagnetic (true, default) or electrostatic (false) models
+- `max_models::Int`: Number of top models to return per input (default: 3)
+- `verbose::Bool`: Print progress information (default: true)
+
+# Returns
+Same structure as the String-based method (see [`model_selector(::String)`](@ref)).
+
+# Example
+#=julia
+using TurbulentTransport, IMAS
+
+# Pre-generate InputTGLF structures with sat3
+dd = IMAS.json2imas("/path/to/ods.json")
+rho_grid = [0.3, 0.5, 0.7]
+input_tglfs = InputTGLF(dd, rho_grid, :sat3, true, false)
+
+# Run model selector
+results = model_selector(input_tglfs)
+
+# Or filter to sat1 models
+input_tglfs_sat1 = InputTGLF(dd, rho_grid, :sat1, true, false)
+results = model_selector(input_tglfs_sat1; filter_sat_rule=:sat1)
+=#
+"""
+function model_selector(input_tglfs::Vector{InputTGLF{T}};
+                       filter_sat_rule::Union{Symbol,Nothing}=:sat3,
+                       electromagnetic::Bool=true,
+                       max_models::Int=3,
+                       verbose::Bool=true) where T
+
+    verbose && println("Analyzing $(length(input_tglfs)) InputTGLF objects\n")
+    rho_values = [inp.RMIN_LOC for inp in input_tglfs]
+    return _model_selector_core(input_tglfs, rho_values; max_models, filter_sat_rule, electromagnetic, verbose)
+end
+
+"""
+    model_selector(input_tglf::InputTGLF{T}; filter_sat_rule=:sat3, electromagnetic=true, max_models=3, verbose=true) where T
+
+Select the most confident TGLF-NN models for a single InputTGLF object.
+
+Convenience method that wraps a single InputTGLF in a vector and extracts the single ranking result.
+
+# Arguments
+- `input_tglf::InputTGLF{T}`: Single InputTGLF structure (already contains all radial location info)
+- `filter_sat_rule::Union{Symbol,Nothing}`: Filter models by saturation rule. Default is :sat3. Set to :all to test all models. (default: :sat3)
+- `electromagnetic::Bool`: Filter to electromagnetic (true, default) or electrostatic (false) models
+- `max_models::Int`: Number of top models to return (default: 3)
+- `verbose::Bool`: Print progress information (default: true)
+
+# Returns
+A NamedTuple with:
+- `rho`: The rho value (or 1 if not provided)
+- `top_models`: Vector of model names (most confident first)
+- `confidences`: Vector of confidence scores (lower is better)
+- `flux_outputs`: Vector of flux solutions for top models
+- `input_tglf`: The InputTGLF structure used
+- `all_results`: Dict mapping model_name => (success, result/error) for all models
+
+# Example
+#=julia
+using TurbulentTransport, IMAS
+
+# Create a single InputTGLF with sat3
+dd = IMAS.json2imas("/path/to/ods.json")
+input_tglf = InputTGLF(dd, [0.5], :sat3, true, false)[1]
+
+# Find best models
+result = model_selector(input_tglf)
+
+println("Top model: \$(result.top_models[1])")
+println("Confidence: \$(result.confidences[1])")
+=#
+"""
+function model_selector(input_tglf::InputTGLF{T};
+                       filter_sat_rule::Union{Symbol,Nothing}=:sat3,
+                       electromagnetic::Bool=true,
+                       max_models::Int=3,
+                       verbose::Bool=true) where T
+
+    verbose && println("Analyzing single InputTGLF\n")
+    rho_values = [input_tglf.RMIN_LOC]
+    full_results = _model_selector_core([input_tglf], rho_values; max_models, filter_sat_rule, electromagnetic, verbose)
+
+    ranking = full_results.rankings[1]
+    return (rho=ranking.rho, top_models=ranking.top_models, confidences=ranking.confidences,
+            flux_outputs=ranking.flux_outputs, input_tglf=input_tglf, all_results=full_results.all_results)
+end
 
 # ------------------------------------------------------------
 # Helper: species splitting transform for stfpp models
