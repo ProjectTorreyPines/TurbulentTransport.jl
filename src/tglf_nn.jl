@@ -1577,7 +1577,8 @@ function model_selector(input_tglf::InputTGLF{T};
 
     ranking = full_results.rankings[1]
     return (rho=ranking.rho, top_models=ranking.top_models, confidences=ranking.confidences,
-            rel_errors=ranking.rel_errors, flux_outputs=ranking.flux_outputs,
+            rel_errors=ranking.rel_errors, rel_errors_vec=ranking.rel_errors_vec,
+            flux_outputs=ranking.flux_outputs,
             input_tglf=input_tglf, all_results=full_results.all_results,
             tjlf_sols=full_results.tjlf_sols, tglf_sols=full_results.tglf_sols)
 end
