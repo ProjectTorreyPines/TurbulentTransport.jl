@@ -644,63 +644,14 @@ Returns a vector of `flux_solution` structures
             tmp3 = flux_array(tglfmod3, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
 
             for i in eachindex(input_tglfs)
-                rmin = inputs[k_rminloc, i]
-
-                if rmin >= 0.68 && rmin < 0.881
-                    # Overlap region: all three models, select by smallest relative error
-                    for k in axes(tmp, 1)
-                        threshold = k == 1 ? 0.03 : 0.3
-
-                        # Extract values and uncertainties directly
-                        val1 = abs(Measurements.value(tmp[k, i]))
-                        val2 = abs(Measurements.value(tmp2[k, i]))
-                        val3 = abs(Measurements.value(tmp3[k, i]))
-                        unc1 = Measurements.uncertainty(tmp[k, i])
-                        unc2 = Measurements.uncertainty(tmp2[k, i])
-                        unc3 = Measurements.uncertainty(tmp3[k, i])
-
-                        # Compute errors directly without allocating arrays
-                        err1 = abs(unc1 / (val1 + threshold))
-                        err2 = abs(unc2 / (val2 + threshold))
-                        err3 = abs(unc3 / (val3 + threshold))
-
-                        # Find minimum and assign without argmin
-                        if err2 < err1 && err2 < err3
-                            tmp[k, i] = tmp2[k, i]
-                        elseif err3 < err1
-                            tmp[k, i] = tmp3[k, i]
-                        end
-                        # If err1 is smallest, keep tmp[k, i] as-is
-                    end
-
-                elseif rmin >= 0.881 && rmin < 0.975
-                    # Overlap region: d3dnearedge (tmp2) or d3dedge (tmp3), select by smallest relative error
-                    for k in axes(tmp, 1)
-                        threshold = k == 1 ? 0.03 : 0.3
-
-                        # Extract values and uncertainties directly
-                        val2 = abs(Measurements.value(tmp2[k, i]))
-                        val3 = abs(Measurements.value(tmp3[k, i]))
-                        unc2 = Measurements.uncertainty(tmp2[k, i])
-                        unc3 = Measurements.uncertainty(tmp3[k, i])
-
-                        # Compute errors directly without allocating arrays
-                        err2 = abs(unc2 / (val2 + threshold))
-                        err3 = abs(unc3 / (val3 + threshold))
-
-                        # Compare and assign
-                        if err2 < err3
-                            tmp[k, i] = tmp2[k, i]
-                        else
-                            tmp[k, i] = tmp3[k, i]
-                        end
-                    end
-
-                elseif rmin >= 0.975
-                    # Edge only: d3dedge
+                if inputs[k_rminloc, i] >= 0.881 && inputs[k_rminloc, i] < 0.975
+                    # Near-edge region: use d3dnearedge
+                    tmp[:, i] .= tmp2[:, i]
+                elseif inputs[k_rminloc, i] >= 0.975
+                    # Edge region: use d3dedge
                     tmp[:, i] .= tmp3[:, i]
                 end
-                # rmin < 0.68: keep tmp (d3d) as-is
+                # rmin < 0.881: keep tmp (d3d) as-is
             end
         end
     else
