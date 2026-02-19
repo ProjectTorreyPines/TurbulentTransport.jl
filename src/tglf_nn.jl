@@ -1060,26 +1060,104 @@ export run_tglfnn, run_tglfnn_onnx, model_selector
 _unwrap_input_tglfs(result) = hasproperty(result, :tglfs) ? getfield(result, :tglfs) : result
 
 """
-    _model_selector_core(input_tglfs::Vector{InputTGLF{T}}, rho_values::Union{Vector,Nothing}; max_models::Int=3, filter_sat_rule::Union{Symbol,Nothing}=nothing, electromagnetic::Bool=true, verbose::Bool=true) where T
+    _model_selector_core(input_tglfs::Vector{InputTGLF{T}}, rho_values::Union{Vector,Nothing}; max_models::Int=3, filter_sat_rule::Union{Symbol,Nothing}=nothing, electromagnetic::Bool=true, ground_truth::Bool=true, show_fluxes::Bool=false, verbose::Bool=true) where T
 
 Core implementation of model selector that works with InputTGLF vectors.
 
 # Arguments
 - `filter_sat_rule`: Optional saturation rule filter (e.g., :sat1). If provided, only models matching this sat rule are tested.
 - `electromagnetic`: Filter to electromagnetic (true, default) or electrostatic (false) models
+- `ground_truth`: Run TJLF and Fortran TGLF for ground truth comparison and accuracy-based ranking (default: true). Set to false to skip and rank by confidence only.
+- `show_fluxes`: Print per-flux values and vectorized relative errors (default: false). When false, only the mean relative error is shown.
 
 # Notes
 - Automatically skips models with "gknn", "qlnn", or "edge" in their name (these are correction/specialized models, not standalone models)
 """
-function _model_selector_core(input_tglfs::Vector{InputTGLF{T}}, rho_values::Union{Vector,Nothing}; max_models::Int=3, filter_sat_rule::Union{Symbol,Nothing}=nothing, electromagnetic::Bool=true, verbose::Bool=true) where T
+function _model_selector_core(input_tglfs::Vector{InputTGLF{T}}, rho_values::Union{Vector,Nothing}; max_models::Int=3, filter_sat_rule::Union{Symbol,Nothing}=nothing, electromagnetic::Bool=true, ground_truth::Bool=true, show_fluxes::Bool=false, verbose::Bool=true) where T
     # Make a copy to prevent in-place modifications by stfpp/tefpp models
     input_tglfs = deepcopy(input_tglfs)
+
+    # Apply presets for TJLF consistency (same as TGLF Fortran USE_PRESETS=.true.)
+    for it in input_tglfs
+        apply_presets!(it)
+    end
+
+    # Run TJLF (Julia) for ground truth
+    tjlf_sols = if !ground_truth
+        nothing
+    else
+        try
+            verbose && println("Running TJLF (Julia) for ground truth...")
+            sols = [run_tjlf(it) for it in input_tglfs]
+            verbose && println("  TJLF done\n")
+            sols
+        catch e
+            verbose && @warn "TJLF unavailable, ranking by confidence only: $e"
+            nothing
+        end
+    end
+
+    # Try Fortran TGLF as additional ground truth (only if in PATH)
+    tglf_sols = if !ground_truth
+        nothing
+    else
+        try
+            verbose && println("Running Fortran TGLF for ground truth...")
+            sols = [run_tglf(it) for it in input_tglfs]
+            verbose && println("  Fortran TGLF done\n")
+            sols
+        catch e
+            verbose && println("  Fortran TGLF not available ($(typeof(e)))\n")
+            nothing
+        end
+    end
+
+    # Use Fortran TGLF if available, otherwise fall back to TJLF
+    ground_truth_sols = tglf_sols !== nothing ? tglf_sols : tjlf_sols
+    ground_truth_label = tglf_sols !== nothing ? "TGLF" : (tjlf_sols !== nothing ? "TJLF" : "none")
+
+    # Print TJLF vs Fortran TGLF comparison to verify apply_presets! consistency
+    if verbose && tjlf_sols !== nothing && tglf_sols !== nothing
+        flux_names = ["PARTICLE_FLUX_e", "ENERGY_FLUX_e", "ENERGY_FLUX_i", "STRESS_TOR_i"]
+        thresholds = [0.03, 0.3, 0.3, 0.3]
+        rho_labels = rho_values !== nothing ? rho_values : collect(1:length(input_tglfs))
+        all_agree = true
+        flux_lines = String[]
+        for (rho_idx, rho) in enumerate(rho_labels)
+            tj = tjlf_sols[rho_idx]
+            tf = tglf_sols[rho_idx]
+            tjlf_fluxes = [tj.PARTICLE_FLUX_e, tj.ENERGY_FLUX_e, tj.ENERGY_FLUX_i, tj.STRESS_TOR_i]
+            tglf_fluxes = [tf.PARTICLE_FLUX_e, tf.ENERGY_FLUX_e, tf.ENERGY_FLUX_i, tf.STRESS_TOR_i]
+            push!(flux_lines, "  RMIN_LOC=$(round(rho, digits=3)):")
+            for (name, tjlf_val, tglf_val, thresh) in zip(flux_names, tjlf_fluxes, tglf_fluxes, thresholds)
+                rel_err = abs(tjlf_val - tglf_val) / (abs(tglf_val) + thresh)
+                agree_1pct = rel_err < 0.01
+                agree_abs = abs(tjlf_val - tglf_val) < thresh
+                if !agree_1pct || !agree_abs
+                    all_agree = false
+                end
+                push!(flux_lines, "    $name: TJLF=$(round(tjlf_val, digits=4))  TGLF=$(round(tglf_val, digits=4))  rel_err=$(round(rel_err, digits=4))  [1%:$(agree_1pct ? "✓" : "✗")  abs<$thresh:$(agree_abs ? "✓" : "✗")]")
+            end
+        end
+        if all_agree
+            println("Ground truth (TJLF Julia vs Fortran TGLF): ✓ all fluxes agree\n")
+        else
+            println("Ground truth (TJLF Julia vs Fortran TGLF): ✗ discrepancies found")
+            foreach(println, flux_lines)
+            println()
+        end
+    end
 
     # Get all available models and apply filters
     all_models = available_models()
 
     # Skip correction/specialized models
     all_models = filter(m -> !occursin("gknn", m) && !occursin("qlnn", m) && !occursin("edge", m), all_models)
+
+    # Skip azf+1 models when ALPHA_ZF=-1 (zonal flow suppression not applicable)
+    if all(it -> it.ALPHA_ZF == -1.0, input_tglfs)
+        all_models = filter(m -> !endswith(m, "azf+1"), all_models)
+    end
 
     # Filter by electromagnetic vs electrostatic
     physics_str = electromagnetic ? "_em_" : "_es_"
@@ -1104,9 +1182,7 @@ function _model_selector_core(input_tglfs::Vector{InputTGLF{T}}, rho_values::Uni
     # Run all models and collect results
     all_results = Dict{String, Tuple{Bool, Any}}()
 
-    for (idx, model_name) in enumerate(all_models)
-        verbose && (idx == 1 || idx % 10 == 0) && println("  Model $idx/$(length(all_models)): $model_name")
-
+    for model_name in all_models
         try
             flux_sols = run_tglfnn(input_tglfs;
                                   model_filename=model_name,
@@ -1116,26 +1192,25 @@ function _model_selector_core(input_tglfs::Vector{InputTGLF{T}}, rho_values::Uni
             all_results[model_name] = (true, flux_sols)
         catch e
             all_results[model_name] = (false, e)
-            verbose && println("    ⚠ $model_name failed: $(typeof(e))")
         end
     end
 
     successful_models = [name for (name, (success, _)) in all_results if success]
-    verbose && println("\nCompleted: $(length(successful_models))/$(length(all_models)) models successful\n")
 
     # Rank models at each rho location
     rho_vec = rho_values === nothing ? collect(1:length(input_tglfs)) : rho_values
     rankings = []
 
     for (rho_idx, rho) in enumerate(rho_vec)
-        # Compute confidence for each successful model
-        model_confidences = []
+        tjlf_sol = ground_truth_sols === nothing ? nothing : ground_truth_sols[rho_idx]
+
+        # Compute confidence and relative error to TJLF for each successful model
+        model_scores = []
 
         for model_name in successful_models
             flux_sol = all_results[model_name][2][rho_idx]
 
-            # Compute average confidence across all fluxes
-            # Metric: relative uncertainty = unc / (|value| + threshold)
+            # Confidence: relative uncertainty = unc / (|value| + threshold)
             fluxes = [flux_sol.PARTICLE_FLUX_e, flux_sol.ENERGY_FLUX_e,
                       flux_sol.ENERGY_FLUX_i, flux_sol.STRESS_TOR_i]
             thresholds = [0.03, 0.3, 0.3, 0.3]
@@ -1148,24 +1223,86 @@ function _model_selector_core(input_tglfs::Vector{InputTGLF{T}}, rho_values::Uni
             end
             confidence /= length(fluxes)
 
-            push!(model_confidences, (model_name, confidence, flux_sol))
+            # Relative error to ground truth: |pred - gt| / (|gt| + 1e-6)
+            rel_errors_vec = zeros(4)
+            if tjlf_sol !== nothing
+                tjlf_fluxes = [tjlf_sol.PARTICLE_FLUX_e, tjlf_sol.ENERGY_FLUX_e,
+                              tjlf_sol.ENERGY_FLUX_i, tjlf_sol.STRESS_TOR_i]
+                for (k, (flux, tjlf_val)) in enumerate(zip(fluxes, tjlf_fluxes))
+                    pred_val = Measurements.value(flux)
+                    rel_errors_vec[k] = abs(pred_val - tjlf_val) / (abs(tjlf_val) + 1e-6)
+                end
+            end
+            rel_error = sum(rel_errors_vec) / length(rel_errors_vec)
+
+            push!(model_scores, (model_name, confidence, rel_error, rel_errors_vec, flux_sol))
         end
 
-        # Sort by confidence (lower is better) and take top N
-        sort!(model_confidences, by=x->x[2])
-        n_top = min(max_models, length(model_confidences))
+        # Sort by rel_error when ground truth is available, otherwise by confidence
+        sort!(model_scores, by=x -> tjlf_sol === nothing ? x[2] : x[3])
+
+        # Deduplicate: group models with identical flux outputs
+        flux_key(ms) = (
+            Measurements.value(ms[5].PARTICLE_FLUX_e),
+            Measurements.value(ms[5].ENERGY_FLUX_e),
+            Measurements.value(ms[5].ENERGY_FLUX_i),
+            Measurements.value(ms[5].STRESS_TOR_i)
+        )
+        seen_fluxes = Dict{NTuple{4,Float64}, Vector{String}}()
+        unique_model_scores = []
+        for ms in model_scores
+            key = flux_key(ms)
+            if !haskey(seen_fluxes, key)
+                seen_fluxes[key] = [ms[1]]
+                push!(unique_model_scores, ms)
+            else
+                push!(seen_fluxes[key], ms[1])
+            end
+        end
+
+        n_top = min(max_models, length(unique_model_scores))
 
         push!(rankings, (
             rho=rho,
-            top_models=[mc[1] for mc in model_confidences[1:n_top]],
-            confidences=[mc[2] for mc in model_confidences[1:n_top]],
-            flux_outputs=[mc[3] for mc in model_confidences[1:n_top]]
+            top_models=[ms[1] for ms in unique_model_scores[1:n_top]],
+            confidences=[ms[2] for ms in unique_model_scores[1:n_top]],
+            rel_errors=[ms[3] for ms in unique_model_scores[1:n_top]],
+            rel_errors_vec=[ms[4] for ms in unique_model_scores[1:n_top]],
+            flux_outputs=[ms[5] for ms in unique_model_scores[1:n_top]]
         ))
 
         if verbose
-            println("\nTop $n_top models at RMIN_LOC=$(round(rho, digits=3)):")
-            for (i, (name, conf, _)) in enumerate(model_confidences[1:n_top])
-                println("  $i. $name ($(round(conf, digits=4)))")
+            flux_str(Γ, Qe, Qi, Π) = "Γ=$(round(Γ, digits=3)) Qe=$(round(Qe, digits=3)) Qi=$(round(Qi, digits=3)) Π=$(round(Π, digits=3))"
+            gt_flux_str = if tjlf_sol !== nothing && show_fluxes
+                " [$(ground_truth_label): $(flux_str(tjlf_sol.PARTICLE_FLUX_e, tjlf_sol.ENERGY_FLUX_e, tjlf_sol.ENERGY_FLUX_i, tjlf_sol.STRESS_TOR_i))]"
+            else
+                ""
+            end
+            println("\nTop $n_top models at RMIN_LOC=$(round(rho, digits=3)):$gt_flux_str")
+            for (i, ms) in enumerate(unique_model_scores[1:n_top])
+                (name, conf, rel_err, rel_errs, flux_sol) = ms
+                all_names = join(seen_fluxes[flux_key(ms)], ", ")
+                err_str = if tjlf_sol !== nothing
+                    if show_fluxes
+                        errs = join([round(r, digits=3) for r in rel_errs], " ")
+                        ", rel_err_$(ground_truth_label)=[$errs]"
+                    else
+                        ", rel_err_$(ground_truth_label)=$(round(rel_err, digits=4))"
+                    end
+                else
+                    ""
+                end
+                nn_flux_suffix = if show_fluxes
+                    " [NN: $(flux_str(
+                        Measurements.value(flux_sol.PARTICLE_FLUX_e),
+                        Measurements.value(flux_sol.ENERGY_FLUX_e),
+                        Measurements.value(flux_sol.ENERGY_FLUX_i),
+                        Measurements.value(flux_sol.STRESS_TOR_i)
+                    ))]"
+                else
+                    ""
+                end
+                println("  $i. $all_names (conf=$(round(conf, digits=4))$err_str)$nn_flux_suffix")
             end
         end
     end
@@ -1174,7 +1311,9 @@ function _model_selector_core(input_tglfs::Vector{InputTGLF{T}}, rho_values::Uni
         rho_grid=rho_vec,
         rankings=rankings,
         input_tglfs=input_tglfs,
-        all_results=all_results
+        all_results=all_results,
+        tjlf_sols=tjlf_sols,
+        tglf_sols=tglf_sols
     )
 end
 
@@ -1204,6 +1343,8 @@ Note: Automatically skips "gknn", "qlnn", and "edge" models (correction/speciali
 - `sat_rule::Symbol`: Saturation rule for InputTGLF generation (default: :sat3)
 - `filter_sat_rule::Union{Symbol,Nothing}`: Filter models by saturation rule. By default (nothing), automatically matches `sat_rule`. Set to a specific symbol (e.g., :sat1) to override, or set to :all to test all models. (default: nothing, auto-matches sat_rule)
 - `max_models::Int`: Number of top models to return per rho (default: 3)
+- `ground_truth::Bool`: Run TJLF/TGLF for accuracy-based ranking (default: true). Set to false for faster confidence-only ranking.
+- `show_fluxes::Bool`: Print per-flux values and vectorized relative errors (default: false).
 - `verbose::Bool`: Print progress information (default: true)
 
 # Returns
@@ -1249,6 +1390,8 @@ function model_selector(ods_path::String;
                        sat_rule::Symbol=:sat3,
                        filter_sat_rule::Union{Symbol,Nothing}=nothing,
                        max_models::Int=3,
+                       ground_truth::Bool=true,
+                       show_fluxes::Bool=false,
                        verbose::Bool=true)
 
     verbose && println("Loading ODS from: $ods_path")
@@ -1263,7 +1406,7 @@ function model_selector(ods_path::String;
     # Auto-match filter_sat_rule to sat_rule if not specified
     effective_filter = filter_sat_rule === nothing ? sat_rule : filter_sat_rule
 
-    return _model_selector_core(input_tglfs, rho_vec; max_models, filter_sat_rule=effective_filter, electromagnetic, verbose)
+    return _model_selector_core(input_tglfs, rho_vec; max_models, filter_sat_rule=effective_filter, electromagnetic, ground_truth, show_fluxes, verbose)
 end
 
 """
@@ -1283,6 +1426,8 @@ Note: Automatically skips "gknn", "qlnn", and "edge" models (correction/speciali
 - `sat_rule::Symbol`: Saturation rule for InputTGLF generation (default: :sat3)
 - `filter_sat_rule::Union{Symbol,Nothing}`: Filter models by saturation rule. By default (nothing), automatically matches `sat_rule`. Set to a specific symbol (e.g., :sat1) to override, or set to :all to test all models. (default: nothing, auto-matches sat_rule)
 - `max_models::Int`: Number of top models to return per rho (default: 3)
+- `ground_truth::Bool`: Run TJLF/TGLF for accuracy-based ranking (default: true). Set to false for faster confidence-only ranking.
+- `show_fluxes::Bool`: Print per-flux values and vectorized relative errors (default: false).
 - `verbose::Bool`: Print progress information (default: true)
 
 # Returns
@@ -1311,6 +1456,8 @@ function model_selector(dd::IMAS.dd;
                        sat_rule::Symbol=:sat3,
                        filter_sat_rule::Union{Symbol,Nothing}=nothing,
                        max_models::Int=3,
+                       ground_truth::Bool=true,
+                       show_fluxes::Bool=false,
                        verbose::Bool=true)
 
     rho_vec = rho_grid isa Number ? [Float64(rho_grid)] : collect(rho_grid)
@@ -1320,7 +1467,7 @@ function model_selector(dd::IMAS.dd;
 
     effective_filter = filter_sat_rule === nothing ? sat_rule : filter_sat_rule
 
-    return _model_selector_core(input_tglfs, rho_vec; max_models, filter_sat_rule=effective_filter, electromagnetic, verbose)
+    return _model_selector_core(input_tglfs, rho_vec; max_models, filter_sat_rule=effective_filter, electromagnetic, ground_truth, show_fluxes, verbose)
 end
 
 """
@@ -1339,6 +1486,8 @@ This function:
 - `filter_sat_rule::Union{Symbol,Nothing}`: Filter models by saturation rule. Default is :sat3. Set to :all to test all models. (default: :sat3)
 - `electromagnetic::Bool`: Filter to electromagnetic (true, default) or electrostatic (false) models
 - `max_models::Int`: Number of top models to return per input (default: 3)
+- `ground_truth::Bool`: Run TJLF/TGLF for accuracy-based ranking (default: true). Set to false for faster confidence-only ranking.
+- `show_fluxes::Bool`: Print per-flux values and vectorized relative errors (default: false).
 - `verbose::Bool`: Print progress information (default: true)
 
 # Returns
@@ -1365,11 +1514,13 @@ function model_selector(input_tglfs::Vector{InputTGLF{T}};
                        filter_sat_rule::Union{Symbol,Nothing}=:sat3,
                        electromagnetic::Bool=true,
                        max_models::Int=3,
+                       ground_truth::Bool=true,
+                       show_fluxes::Bool=false,
                        verbose::Bool=true) where T
 
     verbose && println("Analyzing $(length(input_tglfs)) InputTGLF objects\n")
     rho_values = [inp.RMIN_LOC for inp in input_tglfs]
-    return _model_selector_core(input_tglfs, rho_values; max_models, filter_sat_rule, electromagnetic, verbose)
+    return _model_selector_core(input_tglfs, rho_values; max_models, filter_sat_rule, electromagnetic, ground_truth, show_fluxes, verbose)
 end
 
 """
@@ -1384,6 +1535,8 @@ Convenience method that wraps a single InputTGLF in a vector and extracts the si
 - `filter_sat_rule::Union{Symbol,Nothing}`: Filter models by saturation rule. Default is :sat3. Set to :all to test all models. (default: :sat3)
 - `electromagnetic::Bool`: Filter to electromagnetic (true, default) or electrostatic (false) models
 - `max_models::Int`: Number of top models to return (default: 3)
+- `ground_truth::Bool`: Run TJLF/TGLF for accuracy-based ranking (default: true). Set to false for faster confidence-only ranking.
+- `show_fluxes::Bool`: Print per-flux values and vectorized relative errors (default: false).
 - `verbose::Bool`: Print progress information (default: true)
 
 # Returns
@@ -1414,15 +1567,20 @@ function model_selector(input_tglf::InputTGLF{T};
                        filter_sat_rule::Union{Symbol,Nothing}=:sat3,
                        electromagnetic::Bool=true,
                        max_models::Int=3,
+                       ground_truth::Bool=true,
+                       show_fluxes::Bool=false,
                        verbose::Bool=true) where T
 
     verbose && println("Analyzing single InputTGLF\n")
     rho_values = [input_tglf.RMIN_LOC]
-    full_results = _model_selector_core([input_tglf], rho_values; max_models, filter_sat_rule, electromagnetic, verbose)
+    full_results = _model_selector_core([input_tglf], rho_values; max_models, filter_sat_rule, electromagnetic, ground_truth, show_fluxes, verbose)
 
     ranking = full_results.rankings[1]
     return (rho=ranking.rho, top_models=ranking.top_models, confidences=ranking.confidences,
-            flux_outputs=ranking.flux_outputs, input_tglf=input_tglf, all_results=full_results.all_results)
+            rel_errors=ranking.rel_errors, rel_errors_vec=ranking.rel_errors_vec,
+            flux_outputs=ranking.flux_outputs,
+            input_tglf=input_tglf, all_results=full_results.all_results,
+            tjlf_sols=full_results.tjlf_sols, tglf_sols=full_results.tglf_sols)
 end
 
 # ------------------------------------------------------------
