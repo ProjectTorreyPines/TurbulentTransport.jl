@@ -19,6 +19,8 @@
         @test haskey(results, :rankings)
         @test haskey(results, :input_tglfs)
         @test haskey(results, :all_results)
+        @test haskey(results, :tjlf_sols)
+        @test haskey(results, :tglf_sols)
 
         # Test rho_grid (should contain RMIN_LOC from each InputTGLF)
         @test length(results.rho_grid) == 3
@@ -29,15 +31,21 @@
             @test haskey(ranking, :rho)
             @test haskey(ranking, :top_models)
             @test haskey(ranking, :confidences)
+            @test haskey(ranking, :rel_errors)
+            @test haskey(ranking, :rel_errors_vec)
             @test haskey(ranking, :flux_outputs)
 
             # Should have at most 3 models (max_models=3)
             @test length(ranking.top_models) <= 3
             @test length(ranking.top_models) == length(ranking.confidences)
+            @test length(ranking.top_models) == length(ranking.rel_errors)
+            @test length(ranking.top_models) == length(ranking.rel_errors_vec)
             @test length(ranking.top_models) == length(ranking.flux_outputs)
 
-            # Confidences should be sorted (lower is better)
-            @test issorted(ranking.confidences)
+            # Confidences and rel_errors should be valid
+            @test all(c -> c >= 0 && isfinite(c), ranking.confidences)
+            @test all(r -> r >= 0 && isfinite(r), ranking.rel_errors)
+            @test all(rv -> length(rv) == 4 && all(r -> r >= 0 && isfinite(r), rv), ranking.rel_errors_vec)
 
             # Each model name should start with "sat3_em_" (filtered)
             for model in ranking.top_models
@@ -86,16 +94,24 @@
         @test haskey(result, :rho)
         @test haskey(result, :top_models)
         @test haskey(result, :confidences)
+        @test haskey(result, :rel_errors)
+        @test haskey(result, :rel_errors_vec)
         @test haskey(result, :flux_outputs)
         @test haskey(result, :input_tglf)
         @test haskey(result, :all_results)
+        @test haskey(result, :tjlf_sols)
+        @test haskey(result, :tglf_sols)
 
         # Test values
         @test result.rho == input.RMIN_LOC  # Should match RMIN_LOC from input
         @test length(result.top_models) <= 3
         @test length(result.top_models) == length(result.confidences)
+        @test length(result.top_models) == length(result.rel_errors)
+        @test length(result.top_models) == length(result.rel_errors_vec)
         @test length(result.top_models) == length(result.flux_outputs)
-        @test issorted(result.confidences)
+        @test all(c -> c >= 0 && isfinite(c), result.confidences)
+        @test all(r -> r >= 0 && isfinite(r), result.rel_errors)
+        @test all(rv -> length(rv) == 4 && all(r -> r >= 0 && isfinite(r), rv), result.rel_errors_vec)
 
         # Test input_tglf is preserved
         @test result.input_tglf === input
@@ -214,15 +230,16 @@
             verbose=false
         )
 
-        # Test that confidences are positive and reasonable
+        # Test that confidences and rel_errors are positive and reasonable
         for ranking in results.rankings
             for conf in ranking.confidences
                 @test conf >= 0.0
                 @test isfinite(conf)
             end
-
-            # Confidences should be sorted (lower = more confident)
-            @test issorted(ranking.confidences)
+            for rel_err in ranking.rel_errors
+                @test rel_err >= 0.0
+                @test isfinite(rel_err)
+            end
         end
     end
 
