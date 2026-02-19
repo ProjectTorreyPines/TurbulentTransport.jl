@@ -268,19 +268,16 @@ end
 
     @testset "Model: $model_name" for model_name in radial_models
         # Create test inputs with different RMIN_LOC values covering all radial regions
-        input_core = load_sample_input()  # rmin ~ 0.573 (< 0.68, core region)
+        input_core = load_sample_input()  # rmin ~ 0.573 (< 0.881, core region, uses d3d)
         TurbulentTransport.apply_presets!(input_core)
         
-        input_overlap1 = deepcopy(input_core)
-        input_overlap1.RMIN_LOC = 0.75  # 0.68 <= rmin < 0.881 (overlap: all three models)
-        
-        input_overlap2 = deepcopy(input_core)
-        input_overlap2.RMIN_LOC = 0.92  # 0.881 <= rmin < 0.975 (overlap: nearedge & edge)
+        input_nearedge = deepcopy(input_core)
+        input_nearedge.RMIN_LOC = 0.92  # 0.881 <= rmin < 0.975 (near-edge region, uses d3dnearedge)
         
         input_edge = deepcopy(input_core)
-        input_edge.RMIN_LOC = 0.98  # rmin >= 0.975 (edge only)
+        input_edge.RMIN_LOC = 0.98  # rmin >= 0.975 (edge region, uses d3dedge)
 
-        @testset "Single input - core region (rmin < 0.68)" begin
+        @testset "Single input - core region (rmin < 0.881)" begin
             result = TurbulentTransport.run_tglfnn(
                 input_core;
                 model_filename=model_name,
@@ -293,22 +290,9 @@ end
             @test isfinite(result.STRESS_TOR_i)
         end
 
-        @testset "Single input - overlap region 1 (0.68 <= rmin < 0.881)" begin
+        @testset "Single input - near-edge region (0.881 <= rmin < 0.975)" begin
             result = TurbulentTransport.run_tglfnn(
-                input_overlap1;
-                model_filename=model_name,
-                warn_nn_train_bounds=false
-            )
-            @test result isa FluxSolution
-            @test isfinite(result.ENERGY_FLUX_e)
-            @test isfinite(result.ENERGY_FLUX_i)
-            @test isfinite(result.PARTICLE_FLUX_e)
-            @test isfinite(result.STRESS_TOR_i)
-        end
-
-        @testset "Single input - overlap region 2 (0.881 <= rmin < 0.975)" begin
-            result = TurbulentTransport.run_tglfnn(
-                input_overlap2;
+                input_nearedge;
                 model_filename=model_name,
                 warn_nn_train_bounds=false
             )
@@ -333,7 +317,7 @@ end
         end
 
         @testset "Batch input - multiple radial regions" begin
-            inputs = [input_core, input_overlap1, input_overlap2, input_edge]
+            inputs = [input_core, input_nearedge, input_edge]
             results = TurbulentTransport.run_tglfnn(
                 inputs;
                 model_filename=model_name,
@@ -341,7 +325,7 @@ end
             )
             
             @test results isa Vector
-            @test length(results) == 4
+            @test length(results) == 3
             @test all(r -> r isa FluxSolution, results)
             
             # Check that all flux values are finite
@@ -354,7 +338,7 @@ end
         end
 
         @testset "Batch vs single equivalence" begin
-            inputs = [input_core, input_overlap1, input_overlap2, input_edge]
+            inputs = [input_core, input_nearedge, input_edge]
             
             # Run individually
             single_results = [
@@ -374,10 +358,10 @@ end
             
             # Compare results (allow for floating-point precision differences)
             for (single, batch) in zip(single_results, batch_results)
-                @test single.ENERGY_FLUX_e ≈ batch.ENERGY_FLUX_e rtol=1e-12
-                @test single.ENERGY_FLUX_i ≈ batch.ENERGY_FLUX_i rtol=1e-12
-                @test single.PARTICLE_FLUX_e ≈ batch.PARTICLE_FLUX_e rtol=1e-12
-                @test single.STRESS_TOR_i ≈ batch.STRESS_TOR_i rtol=1e-12
+                @test single.ENERGY_FLUX_e ≈ batch.ENERGY_FLUX_e rtol=REGRESSION_RTOL
+                @test single.ENERGY_FLUX_i ≈ batch.ENERGY_FLUX_i rtol=REGRESSION_RTOL
+                @test single.PARTICLE_FLUX_e ≈ batch.PARTICLE_FLUX_e rtol=REGRESSION_RTOL
+                @test single.STRESS_TOR_i ≈ batch.STRESS_TOR_i rtol=REGRESSION_RTOL
             end
         end
     end
