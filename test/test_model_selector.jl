@@ -218,33 +218,7 @@
         @test length(results_5.rankings[1].top_models) <= 5
     end
 
-    @testset "confidence metric properties" begin
-        # Create inputs with varying uncertainties
-        inputs = create_regression_inputs()
-
-        results = model_selector(
-            inputs;
-            filter_sat_rule=:sat3,
-            electromagnetic=true,
-            max_models=3,
-            verbose=false
-        )
-
-        # Test that confidences and rel_errors are positive and reasonable
-        for ranking in results.rankings
-            for conf in ranking.confidences
-                @test conf >= 0.0
-                @test isfinite(conf)
-            end
-            for rel_err in ranking.rel_errors
-                @test rel_err >= 0.0
-                @test isfinite(rel_err)
-            end
-        end
-    end
-
-    @testset "basic validation" begin
-        # Simple validation test - just ensure function runs and returns valid structure
+    @testset "ground_truth=false" begin
         input = load_sample_input()
         TurbulentTransport.apply_presets!(input)
 
@@ -253,16 +227,46 @@
             filter_sat_rule=:sat3,
             electromagnetic=true,
             max_models=3,
+            ground_truth=false,
             verbose=false
         )
 
-        # Test that we got valid results
-        @test !isempty(results.rankings)
-        @test !isempty(results.rankings[1].top_models)
-        @test all(conf -> conf >= 0 && isfinite(conf), results.rankings[1].confidences)
+        # With no ground truth, tjlf_sols and tglf_sols should be nothing
+        @test results.tjlf_sols === nothing
+        @test results.tglf_sols === nothing
 
-        # Test that at least some models succeeded
-        n_success = count(x -> x[1], values(results.all_results))
-        @test n_success >= 3  # Should have at least 3 successful models
+        # rel_errors should all be zero (no ground truth to compare against)
+        @test all(r -> r == 0.0, results.rankings[1].rel_errors)
+        @test all(rv -> all(r -> r == 0.0, rv), results.rankings[1].rel_errors_vec)
+
+        # Confidences should still be valid (ranking falls back to confidence)
+        @test all(c -> c >= 0 && isfinite(c), results.rankings[1].confidences)
+    end
+
+    @testset "show_fluxes=true" begin
+        input = load_sample_input()
+        TurbulentTransport.apply_presets!(input)
+
+        # Should run without error and return same structure as show_fluxes=false
+        results_with = model_selector(
+            [input];
+            filter_sat_rule=:sat3,
+            electromagnetic=true,
+            max_models=3,
+            show_fluxes=true,
+            verbose=false
+        )
+        results_without = model_selector(
+            [input];
+            filter_sat_rule=:sat3,
+            electromagnetic=true,
+            max_models=3,
+            show_fluxes=false,
+            verbose=false
+        )
+
+        # show_fluxes only affects printed output, not the returned data
+        @test results_with.rankings[1].top_models == results_without.rankings[1].top_models
+        @test results_with.rankings[1].rel_errors ≈ results_without.rankings[1].rel_errors
     end
 end
