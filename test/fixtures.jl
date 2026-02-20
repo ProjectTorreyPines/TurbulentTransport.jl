@@ -217,6 +217,27 @@ const REGRESSION_EXPECTED_VALUES = Dict(
         STRESS_TOR_i = -2.505297891574754,
     ),
 
+    # sat3_em_d3d_azf-1_withnegD, fidelity=:GKNN (gknn31 for core, gknn37 for nearedge/edge)
+    # Core region: standard regression inputs have RMIN_LOC ~ 0.573 (< 0.881)
+    ("sat3_em_d3d_azf-1_withnegD", :GKNN, 1) => (
+        ENERGY_FLUX_e = 2.6684677958208214,
+        ENERGY_FLUX_i = 3.6847767062720567,
+        PARTICLE_FLUX_e = 0.4532594773065663,
+        STRESS_TOR_i = 2.6189945343365966,
+    ),
+    ("sat3_em_d3d_azf-1_withnegD", :GKNN, 2) => (
+        ENERGY_FLUX_e = 1.2031340124396976,
+        ENERGY_FLUX_i = 1.2022329022959128,
+        PARTICLE_FLUX_e = 0.005548728196802677,
+        STRESS_TOR_i = 0.934178367714521,
+    ),
+    ("sat3_em_d3d_azf-1_withnegD", :GKNN, 3) => (
+        ENERGY_FLUX_e = 3.170809458786961,
+        ENERGY_FLUX_i = 5.73307225277411,
+        PARTICLE_FLUX_e = 0.807380415310261,
+        STRESS_TOR_i = 4.127336366002528,
+    ),
+
     # sat3_em_d3d+mastu_azf-1, fidelity=:GKNN (gknn36 branch)
     ("sat3_em_d3d+mastu_azf-1", :GKNN, 1) => (
         ENERGY_FLUX_e = 2.263637009987901,
@@ -238,6 +259,20 @@ const REGRESSION_EXPECTED_VALUES = Dict(
     ),
 )
 
+# Expected GKNN outputs for sat3_em_d3d_azf-1_withnegD near-edge and edge regions.
+# These use the same 3 regression inputs but with RMIN_LOC overridden.
+const EXPECTED_WITHNEGD_GKNN_NEAREDGE = [
+    (ENERGY_FLUX_e = 7.0707026293322075,  ENERGY_FLUX_i = 9.168772659151367,   PARTICLE_FLUX_e = 0.5154563007863154, STRESS_TOR_i = 10.268832008465322),
+    (ENERGY_FLUX_e = 12.076422778679625,  ENERGY_FLUX_i = 21.937627911188027,  PARTICLE_FLUX_e = 2.3654111750957756, STRESS_TOR_i = 21.95335587598116),
+    (ENERGY_FLUX_e = 7.031283327361469,   ENERGY_FLUX_i = 12.345653679696769,  PARTICLE_FLUX_e = 0.8550890719132245, STRESS_TOR_i = 11.803256087757445),
+]
+
+const EXPECTED_WITHNEGD_GKNN_EDGE = [
+    (ENERGY_FLUX_e = 46.09076728069341,  ENERGY_FLUX_i = 69.0036589060271,    PARTICLE_FLUX_e = 12.028206971680389, STRESS_TOR_i = 77.66283910913276),
+    (ENERGY_FLUX_e = 90.81229427158553,  ENERGY_FLUX_i = 102.34896197878268,  PARTICLE_FLUX_e = 23.975390432947474, STRESS_TOR_i = 76.4223323296172),
+    (ENERGY_FLUX_e = 44.76493473777022,  ENERGY_FLUX_i = 75.97364835822846,   PARTICLE_FLUX_e = 12.749389144163326, STRESS_TOR_i = 86.82843914976294),
+]
+
 # Model configurations for regression testing
 const REGRESSION_MODEL_CONFIGS = [
     ("sat3_em_d3d_azf-1", :TGLFNN, "TGLFNN baseline"),
@@ -245,4 +280,5 @@ const REGRESSION_MODEL_CONFIGS = [
     ("sat3_em_d3d+mastu+nstx_azf-1", :GKNN, "GKNN gknn31"),
     ("sat3_em_d3d_azf-1_gkdb", :GKNN, "GKNN gknn31+cgyro"),
     ("sat3_em_d3d+mastu_azf-1", :GKNN, "GKNN gknn36"),
+    ("sat3_em_d3d_azf-1_withnegD", :GKNN, "GKNN gknn31/gknn37 radial (core)"),
 ]

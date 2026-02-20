@@ -240,6 +240,64 @@ end
     end
 end
 
+@testset "run_tglfnn withnegD + GKNN radial blending (_gknn37)" begin
+    # Covers the new _gknn37 edge model for sat3_em_d3d_azf-1_withnegD:
+    #   RMIN_LOC < 0.881  → d3d flux * _gknn31
+    #   0.881 ≤ RMIN_LOC < 0.975 → d3dnearedge flux * _gknn37
+    #   RMIN_LOC ≥ 0.975  → d3dedge  flux * _gknn37
+    model = "sat3_em_d3d_azf-1_withnegD"
+    inputs = create_regression_inputs()
+
+    inputs_ne = map(inputs) do inp
+        x = deepcopy(inp); x.RMIN_LOC = 0.92; x
+    end
+    inputs_edge = map(inputs) do inp
+        x = deepcopy(inp); x.RMIN_LOC = 0.98; x
+    end
+
+    @testset "Core region (RMIN_LOC < 0.881) — _gknn31" begin
+        for (i, inp) in enumerate(inputs)
+            sol = TurbulentTransport.run_tglfnn(inp; model_filename=model, warn_nn_train_bounds=false, fidelity=:GKNN)
+            test_regression_flux_values(sol, REGRESSION_EXPECTED_VALUES[(model, :GKNN, i)])
+        end
+    end
+
+    @testset "Near-edge region (0.881 ≤ RMIN_LOC < 0.975) — _gknn37" begin
+        for (i, inp) in enumerate(inputs_ne)
+            sol = TurbulentTransport.run_tglfnn(inp; model_filename=model, warn_nn_train_bounds=false, fidelity=:GKNN)
+            test_regression_flux_values(sol, EXPECTED_WITHNEGD_GKNN_NEAREDGE[i])
+        end
+    end
+
+    @testset "Edge region (RMIN_LOC ≥ 0.975) — _gknn37" begin
+        for (i, inp) in enumerate(inputs_edge)
+            sol = TurbulentTransport.run_tglfnn(inp; model_filename=model, warn_nn_train_bounds=false, fidelity=:GKNN)
+            test_regression_flux_values(sol, EXPECTED_WITHNEGD_GKNN_EDGE[i])
+        end
+    end
+
+    @testset "Single vs batch equivalence across all radial regions" begin
+        all_inputs = vcat(inputs, inputs_ne, inputs_edge)
+        singles = [TurbulentTransport.run_tglfnn(inp; model_filename=model, warn_nn_train_bounds=false, fidelity=:GKNN) for inp in all_inputs]
+        batch   = TurbulentTransport.run_tglfnn(all_inputs; model_filename=model, warn_nn_train_bounds=false, fidelity=:GKNN)
+        for (s, v) in zip(singles, batch)
+            @test isapprox(s.ENERGY_FLUX_e,    v.ENERGY_FLUX_e;    rtol=REGRESSION_RTOL)
+            @test isapprox(s.ENERGY_FLUX_i,    v.ENERGY_FLUX_i;    rtol=REGRESSION_RTOL)
+            @test isapprox(s.PARTICLE_FLUX_e,  v.PARTICLE_FLUX_e;  rtol=REGRESSION_RTOL)
+            @test isapprox(s.STRESS_TOR_i,     v.STRESS_TOR_i;     rtol=REGRESSION_RTOL)
+        end
+    end
+
+    @testset "TGLFNN fidelity unaffected (blending only, no GKNN correction)" begin
+        for inp in vcat(inputs_ne, inputs_edge)
+            sol_tglfnn = TurbulentTransport.run_tglfnn(inp; model_filename=model, warn_nn_train_bounds=false, fidelity=:TGLFNN)
+            @test sol_tglfnn isa FluxSolution
+            @test isfinite(sol_tglfnn.ENERGY_FLUX_e)
+            @test isfinite(sol_tglfnn.ENERGY_FLUX_i)
+        end
+    end
+end
+
 @testset "run_tglfnn edge cases" begin
     @testset "Empty input vector" begin
         # run_tglfnn with empty input should return empty results (not error)
