@@ -620,12 +620,11 @@ Returns a vector of `flux_solution` structures
     xnames_val = _get_xnames_without_log10_suffix(tglfmod)
     _extract_all_inputs!(inputs, input_tglfs, xnames_val)
 
-    # Handle models with radial-dependent variants
-    if model_filename in ("sat0quench_em_d3d_azf+1_withnegD", "sat1_em_d3d_azf-1_withnegD", "sat2_em_d3d_azf-1_withnegD", "sat3_em_d3d_azf-1_withnegD")
-        tmp = flux_array(tglfmod, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
+    tmp = flux_array(tglfmod, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
 
-        # Find the index of RMIN_LOC for radial-dependent model selection
-        k_rminloc = nothing
+    # Handle models with radial-dependent variants
+    k_rminloc = nothing
+    if model_filename in ("sat0quench_em_d3d_azf+1_withnegD", "sat1_em_d3d_azf-1_withnegD", "sat2_em_d3d_azf-1_withnegD", "sat3_em_d3d_azf-1_withnegD")
         for (k, item) in enumerate(tglfmod.xnames)
             if item == "RMIN_LOC"
                 k_rminloc = k
@@ -633,29 +632,24 @@ Returns a vector of `flux_solution` structures
             end
         end
 
-        if k_rminloc === nothing
-            @warn "RMIN_LOC not found in xnames for radial-dependent model blending"
-        else
-            # Load additional models for edge regions
-            tglfmod2 = loadmodelonce(replace(model_filename, "d3d" => "d3dnearedge"))
-            tglfmod3 = loadmodelonce(replace(model_filename, "d3d" => "d3dedge"))
-
-            tmp2 = flux_array(tglfmod2, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
-            tmp3 = flux_array(tglfmod3, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
-
-            for i in eachindex(input_tglfs)
-                if inputs[k_rminloc, i] >= 0.881 && inputs[k_rminloc, i] < 0.975
-                    # Near-edge region: use d3dnearedge
-                    tmp[:, i] .= tmp2[:, i]
-                elseif inputs[k_rminloc, i] >= 0.975
-                    # Edge region: use d3dedge
-                    tmp[:, i] .= tmp3[:, i]
+        # For sat3_em_d3d_azf-1_withnegD + GKNN, blending is done in the GKNN block below
+        if model_filename != "sat3_em_d3d_azf-1_withnegD" || fidelity != :GKNN
+            if k_rminloc === nothing
+                @warn "RMIN_LOC not found in xnames for radial-dependent model blending"
+            else
+                tglfmod2 = loadmodelonce(replace(model_filename, "d3d" => "d3dnearedge"))
+                tglfmod3 = loadmodelonce(replace(model_filename, "d3d" => "d3dedge"))
+                tmp2 = flux_array(tglfmod2, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
+                tmp3 = flux_array(tglfmod3, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
+                for i in eachindex(input_tglfs)
+                    if inputs[k_rminloc, i] >= 0.881 && inputs[k_rminloc, i] < 0.975
+                        tmp[:, i] .= tmp2[:, i]
+                    elseif inputs[k_rminloc, i] >= 0.975
+                        tmp[:, i] .= tmp3[:, i]
+                    end
                 end
-                # rmin < 0.881: keep tmp (d3d) as-is
             end
         end
-    else
-        tmp = flux_array(tglfmod, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
     end
     if fidelity == :GKNN
         supported_gknn_models = ("sat3_em_d3d_azf-1", "sat3_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d_azf-1_withnegD", "sat3_em_d3d_azf-1_gkdb", "sat2_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d+mastu_azf-1")
@@ -673,7 +667,45 @@ Returns a vector of `flux_solution` structures
                 err = flux_array(gknn_model, gk_inputs; uncertain, warn_nn_train_bounds, fidelity)[:]
                 tmp[i, :] .*= err
             end
-        elseif model_filename in ("sat3_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d_azf-1_withnegD", "sat3_em_d3d_azf-1_gkdb", "sat2_em_d3d+mastu+nstx_azf-1")
+        elseif model_filename == "sat3_em_d3d_azf-1_withnegD"
+            gk_inputs = acquire!(pool, T, size(inputs, 1) + 4, size(inputs, 2))
+            gk_inputs[1:end-4, :] = inputs
+            if k_rminloc === nothing
+                @warn "RMIN_LOC not found in xnames for GKNN edge blending"
+                gk_inputs[end-3:end, :] = tmp
+                gknn31 = loadmodelonce(model_filename * "_gknn31")
+                err = flux_array(gknn31, gk_inputs; uncertain, warn_nn_train_bounds, fidelity)
+                tmp .*= err
+            else
+                # Load nearedge and edge base models
+                tglfmod2 = loadmodelonce(replace(model_filename, "d3d" => "d3dnearedge"))
+                tglfmod3 = loadmodelonce(replace(model_filename, "d3d" => "d3dedge"))
+                tmp2 = flux_array(tglfmod2, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
+                tmp3 = flux_array(tglfmod3, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
+
+                # Core region (RMIN_LOC < 0.881): _gknn31 applied to d3d flux
+                gknn31 = loadmodelonce(model_filename * "_gknn31")
+                gk_inputs[end-3:end, :] = tmp
+                err1 = flux_array(gknn31, gk_inputs; uncertain, warn_nn_train_bounds, fidelity)
+
+                # Near-edge and edge regions: _gknn37 applied to nearedge/edge flux
+                gknn37 = loadmodelonce(model_filename * "_gknn37")
+                gk_inputs[end-3:end, :] = tmp2
+                err2 = flux_array(gknn37, gk_inputs; uncertain, warn_nn_train_bounds, fidelity)
+                gk_inputs[end-3:end, :] = tmp3
+                err3 = flux_array(gknn37, gk_inputs; uncertain, warn_nn_train_bounds, fidelity)
+
+                for i in eachindex(input_tglfs)
+                    if inputs[k_rminloc, i] >= 0.881 && inputs[k_rminloc, i] < 0.975
+                        tmp[:, i] .= tmp2[:, i] .* err2[:, i]
+                    elseif inputs[k_rminloc, i] >= 0.975
+                        tmp[:, i] .= tmp3[:, i] .* err3[:, i]
+                    else
+                        tmp[:, i] .*= err1[:, i]
+                    end
+                end
+            end
+        elseif model_filename in ("sat3_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d_azf-1_gkdb", "sat2_em_d3d+mastu+nstx_azf-1")
             gk_inputs = acquire!(pool, T, size(inputs, 1) + 4, size(inputs, 2))
             gk_inputs[1:end-4, :] = inputs
             gk_inputs[end-3:end, :] = tmp
@@ -743,7 +775,36 @@ function run_tglfnn(data::Dict; model_filename::String, uncertain::Bool=false, w
             gknni = loadmodelonce(model_filename * "_gknni24")
             err_i = gknni(vcat(x, y[4])...; uncertain, warn_nn_train_bounds, fidelity)
             y[4] .*= err_i
-        elseif model_filename in ("sat3_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d_azf-1_withnegD", "sat3_em_d3d_azf-1_gkdb", "sat2_em_d3d+mastu+nstx_azf-1")
+        elseif model_filename == "sat3_em_d3d_azf-1_withnegD"
+            k_rminloc = findfirst(isequal("RMIN_LOC"), xnames)
+            if k_rminloc === nothing
+                @warn "RMIN_LOC not found in xnames for GKNN edge blending"
+                gknn31 = loadmodelonce(model_filename * "_gknn31")
+                err = gknn31(vcat(x, y)...; uncertain, warn_nn_train_bounds, fidelity)
+                y .*= err
+            else
+                tglfmod2 = loadmodelonce(replace(model_filename, "d3d" => "d3dnearedge"))
+                tglfmod3 = loadmodelonce(replace(model_filename, "d3d" => "d3dedge"))
+                y2 = flux_array(tglfmod2, x; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
+                y3 = flux_array(tglfmod3, x; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
+
+                gknn31 = loadmodelonce(model_filename * "_gknn31")
+                gknn37 = loadmodelonce(model_filename * "_gknn37")
+                err1 = flux_array(gknn31, vcat(x, y); uncertain, warn_nn_train_bounds, fidelity)
+                err2 = flux_array(gknn37, vcat(x, y2); uncertain, warn_nn_train_bounds, fidelity)
+                err3 = flux_array(gknn37, vcat(x, y3); uncertain, warn_nn_train_bounds, fidelity)
+
+                for i in axes(x, 2)
+                    if x[k_rminloc, i] >= 0.881 && x[k_rminloc, i] < 0.975
+                        y[:, i] .= y2[:, i] .* err2[:, i]
+                    elseif x[k_rminloc, i] >= 0.975
+                        y[:, i] .= y3[:, i] .* err3[:, i]
+                    else
+                        y[:, i] .*= err1[:, i]
+                    end
+                end
+            end
+        elseif model_filename in ("sat3_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d_azf-1_gkdb", "sat2_em_d3d+mastu+nstx_azf-1")
             gknn = loadmodelonce(model_filename * "_gknn31")
             err = gknn(vcat(x, y)...; uncertain, warn_nn_train_bounds, fidelity)
             y .*= err
@@ -1028,6 +1089,9 @@ function _model_selector_core(input_tglfs::Vector{InputTGLF{T}}, rho_values::Uni
     # Make a copy to prevent in-place modifications by stfpp/tefpp models
     input_tglfs = deepcopy(input_tglfs)
 
+    # Snapshot ALPHA_ZF before apply_presets! overwrites it (presets always set ALPHA_ZF=-1)
+    original_alpha_zf = [it.ALPHA_ZF for it in input_tglfs]
+
     # Apply presets for TJLF consistency (same as TGLF Fortran USE_PRESETS=.true.)
     for it in input_tglfs
         apply_presets!(it)
@@ -1105,8 +1169,10 @@ function _model_selector_core(input_tglfs::Vector{InputTGLF{T}}, rho_values::Uni
     # Skip correction/specialized models
     all_models = filter(m -> !occursin("gknn", m) && !occursin("qlnn", m) && !occursin("edge", m), all_models)
 
-    # Skip azf+1 models when ALPHA_ZF=-1 (zonal flow suppression not applicable)
-    if all(it -> it.ALPHA_ZF == -1.0, input_tglfs)
+    # Skip azf+1 models when ALPHA_ZF=-1, but not for sat0/sat0quench which rely on azf+1 models
+    sat0_rules = (:sat0, :sat0quench)
+    is_sat0 = filter_sat_rule !== nothing && filter_sat_rule in sat0_rules
+    if !is_sat0 && all(==(-1.0), original_alpha_zf)
         all_models = filter(m -> !endswith(m, "azf+1"), all_models)
     end
 
