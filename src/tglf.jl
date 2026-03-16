@@ -429,8 +429,7 @@ function run_tglf(input_tglf::InputTGLF)
         fluxes["Gam/Gam_GB_elec"],
         fluxes["Gam/Gam_GB_all_ions"],
         fluxes["Pi/Pi_GB_ions"])
-    print(folder)
-    #rm(folder; force=true, recursive=true)
+    rm(folder; force=true, recursive=true)
 
     return sol
 end
