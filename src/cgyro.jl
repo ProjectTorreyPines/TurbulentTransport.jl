@@ -345,11 +345,9 @@ function InputCGYRO(dd::IMAS.dd, gridpoint_cp::Integer, lump_ions::Bool; MXH_mod
                 eqt1d.rho_tor_norm,
                 0.25 * (eqt1d.squareness_lower_inner .+ eqt1d.squareness_lower_outer .+ eqt1d.squareness_upper_inner .+ eqt1d.squareness_upper_outer)
             ).(cp1d.grid.rho_tor_norm)
-        #input_cgyro.ZETA = zeta[gridpoint_cp]
-        #szeta = rmin .* IMAS.gradient(rmin, zeta)
-        #input_cgyro.S_ZETA = szeta[gridpoint_cp]
-        input_cgyro.S_ZETA = 0.0
-        input_cgyro.ZETA = 0.0
+        input_cgyro.ZETA = zeta[gridpoint_cp]
+        szeta = rmin .* IMAS.gradient(rmin, zeta)
+        input_cgyro.S_ZETA = szeta[gridpoint_cp]
 
         Z0 = IMAS.interp1d(eqt1d.rho_tor_norm, eqt1d.geometric_axis.z * 1e2).(cp1d.grid.rho_tor_norm)
         input_cgyro.ZMAG = Z0[gridpoint_cp] / a
