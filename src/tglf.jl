@@ -12,11 +12,11 @@ end
 
 Evaluate TGLF input parameters at given radii
 """
-function InputTGLF(dd::IMAS.dd, rho::AbstractVector{Float64}, sat::Symbol=:sat0, electromagnetic::Bool=false, lump_ions::Bool=true)
+function InputTGLF(dd::IMAS.dd, rho::AbstractVector{Float64}, sat::Symbol=:sat0, electromagnetic::Bool=false, lump_ions::Bool=true; MXH_modes::Int=1)
     eqt = dd.equilibrium.time_slice[]
     cp1d = dd.core_profiles.profiles_1d[]
     gridpoint_cp = [argmin_abs(cp1d.grid.rho_tor_norm, ρ) for ρ in rho]
-    return InputTGLF(eqt, cp1d, gridpoint_cp, sat, electromagnetic, lump_ions)
+    return InputTGLF(eqt, cp1d, gridpoint_cp, sat, electromagnetic, lump_ions; MXH_modes, wall=dd.wall)
 end
 
 """
@@ -24,10 +24,10 @@ end
 
 Evaluate TGLF input parameters at given core profiles grid indexes
 """
-function InputTGLF(dd::IMAS.dd, gridpoint_cp::AbstractVector{Int}, sat::Symbol=:sat0, electromagnetic::Bool=false, lump_ions::Bool=true)
+function InputTGLF(dd::IMAS.dd, gridpoint_cp::AbstractVector{Int}, sat::Symbol=:sat0, electromagnetic::Bool=false, lump_ions::Bool=true; MXH_modes::Int=1)
     eqt = dd.equilibrium.time_slice[]
     cp1d = dd.core_profiles.profiles_1d[]
-    return InputTGLF(eqt, cp1d, gridpoint_cp, sat, electromagnetic, lump_ions)
+    return InputTGLF(eqt, cp1d, gridpoint_cp, sat, electromagnetic, lump_ions; MXH_modes, wall=dd.wall)
 end
 
 function InputTGLF(
@@ -36,7 +36,9 @@ function InputTGLF(
     gridpoint_cp::AbstractVector{Int},
     sat::Symbol,
     electromagnetic::Bool,
-    lump_ions::Bool) where {T<:Real}
+    lump_ions::Bool;
+    MXH_modes::Int=1,
+    wall=nothing) where {T<:Real}
 
     e = IMAS.cgs.e # statcoul
     k = IMAS.cgs.k # erg/eV
@@ -63,26 +65,58 @@ function InputTGLF(
 
     q_profile = IMAS.interp1d(rho_eq, eqt1d.q).(rho_cp)
 
-    if !ismissing(eqt1d, :elongation)
-        kappa = IMAS.interp1d(rho_eq, eqt1d.elongation).(rho_cp)
-    else
-        kappa = zero(rho_cp)
-    end
+    if MXH_modes > 1
+        coeffs = IMAS.rec_to_mxh_coeffs(eqt, wall; MXH_modes)
+        ns = size(coeffs, 2)
+        rho_eq_s = rho_eq[1:ns]
+        L = MXH_modes
+        n_shape = min(L, 6)
 
-    if !ismissing(eqt1d, :triangularity_lower) && !ismissing(eqt1d, :triangularity_upper)
-        delta = IMAS.interp1d(rho_eq, 0.5 * (eqt1d.triangularity_lower + eqt1d.triangularity_upper)).(rho_cp)
-    else
-        delta = zero(rho_cp)
-    end
+        # Override Rmaj with MXH R0
+        Rmaj = IMAS.interp1d(rho_eq_s, m_to_cm .* coeffs[1, :]).(rho_cp)
 
-    if !ismissing(eqt1d, :squareness_lower_inner) && !ismissing(eqt1d, :squareness_lower_outer) && !ismissing(eqt1d, :squareness_upper_inner) &&
-       !ismissing(eqt1d, :squareness_upper_outer)
-        tmp = 0.25 .* (eqt1d.squareness_lower_inner .+ eqt1d.squareness_lower_outer .+ eqt1d.squareness_upper_inner .+ eqt1d.squareness_upper_outer)
-        zeta = IMAS.interp1d(rho_eq, tmp).(rho_cp)
-    else
-        zeta = zero(rho_cp)
-    end
+        kappa  = IMAS.interp1d(rho_eq_s, coeffs[4, :]).(rho_cp)
+        s1_mxh = IMAS.interp1d(rho_eq_s, coeffs[6+L, :]).(rho_cp)  # asin(δ) = s[1]
+        s2_mxh = IMAS.interp1d(rho_eq_s, coeffs[7+L, :]).(rho_cp)  # -ζ = s[2]
 
+        delta = sin.(s1_mxh)
+        zeta  = .-s2_mxh
+
+        skappa = rmin .* IMAS.gradient(rmin, kappa) ./ kappa
+        sdelta = rmin .* IMAS.gradient(rmin, s1_mxh)   # r * d(asin(δ))/dr
+        szeta  = .-rmin .* IMAS.gradient(rmin, s2_mxh) # r * dζ/dr
+
+        # cos coefficients c[0..n_shape] and shears: SHAPE_COS0..SHAPE_COS{n_shape}
+        c_mxh  = [IMAS.interp1d(rho_eq_s, coeffs[5+m, :]).(rho_cp) for m in 0:n_shape]
+        dc_mxh = [rmin .* IMAS.gradient(rmin, c_mxh[i]) for i in eachindex(c_mxh)]
+
+        # sin coefficients s[3..n_shape] and shears: SHAPE_SIN3..SHAPE_SIN{n_shape}
+        s_mxh  = [IMAS.interp1d(rho_eq_s, coeffs[5+L+m, :]).(rho_cp) for m in 3:n_shape]
+        ds_mxh = [rmin .* IMAS.gradient(rmin, s_mxh[i]) for i in eachindex(s_mxh)]
+    else
+        if !ismissing(eqt1d, :elongation)
+            kappa = IMAS.interp1d(rho_eq, eqt1d.elongation).(rho_cp)
+        else
+            kappa = zero(rho_cp)
+        end
+
+        if !ismissing(eqt1d, :triangularity_lower) && !ismissing(eqt1d, :triangularity_upper)
+            delta = IMAS.interp1d(rho_eq, 0.5 * (eqt1d.triangularity_lower + eqt1d.triangularity_upper)).(rho_cp)
+        else
+            delta = zero(rho_cp)
+        end
+
+        if !ismissing(eqt1d, :squareness_lower_inner) && !ismissing(eqt1d, :squareness_lower_outer) && !ismissing(eqt1d, :squareness_upper_inner) &&
+        !ismissing(eqt1d, :squareness_upper_outer)
+            tmp = 0.25 .* (eqt1d.squareness_lower_inner .+ eqt1d.squareness_lower_outer .+ eqt1d.squareness_upper_inner .+ eqt1d.squareness_upper_outer)
+            zeta = IMAS.interp1d(rho_eq, tmp).(rho_cp)
+        else
+            zeta = zero(rho_cp)
+        end
+        skappa = rmin .* IMAS.gradient(rmin, kappa) ./ kappa
+        sdelta = rmin .* IMAS.gradient(rmin, delta)
+        szeta = rmin .* IMAS.gradient(rmin, zeta)
+    end
     a = rmin[end]
     @views q = q_profile[gridpoint_cp]
 
@@ -168,15 +202,22 @@ function InputTGLF(
 
     input_tglf.KAPPA_LOC = @views kappa[gridpoint_cp]
 
-    skappa = rmin .* IMAS.gradient(rmin, kappa) ./ kappa
-    sdelta = rmin .* IMAS.gradient(rmin, delta)
-    szeta = rmin .* IMAS.gradient(rmin, zeta)
-
     input_tglf.S_KAPPA_LOC = @views skappa[gridpoint_cp]
     input_tglf.DELTA_LOC = @views delta[gridpoint_cp]
     input_tglf.S_DELTA_LOC = @views sdelta[gridpoint_cp]
     input_tglf.ZETA_LOC = @views zeta[gridpoint_cp]
     input_tglf.S_ZETA_LOC = @views szeta[gridpoint_cp]
+
+    if MXH_modes > 1
+        for m in 0:n_shape
+            setproperty!(input_tglf, Symbol("SHAPE_COS$m"),   @views c_mxh[m+1][gridpoint_cp])
+            setproperty!(input_tglf, Symbol("SHAPE_S_COS$m"), @views dc_mxh[m+1][gridpoint_cp])
+        end
+        for (i, m) in enumerate(3:n_shape)
+            setproperty!(input_tglf, Symbol("SHAPE_SIN$m"),   @views s_mxh[i][gridpoint_cp])
+            setproperty!(input_tglf, Symbol("SHAPE_S_SIN$m"), @views ds_mxh[i][gridpoint_cp])
+        end
+    end
 
     press = cp1d.pressure_thermal
     Pa_to_dyn = 10.0
@@ -388,7 +429,6 @@ function run_tglf(input_tglf::InputTGLF)
         fluxes["Gam/Gam_GB_elec"],
         fluxes["Gam/Gam_GB_all_ions"],
         fluxes["Pi/Pi_GB_ions"])
-
     rm(folder; force=true, recursive=true)
 
     return sol
