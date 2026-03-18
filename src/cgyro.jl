@@ -173,7 +173,7 @@ Base.@kwdef mutable struct InputCGYRO
     H_PRINT_FLAG::Union{Int64,Missing} = missing
 end
 
-function InputCGYRO(dd::IMAS.dd, gridpoint_cp::Integer, lump_ions::Bool; MXH_modes::Int=1)
+function InputCGYRO(dd::IMAS.dd, gridpoint_cp::Integer, lump_ions::Bool; MXH_modes::Int=1, fast_ions::Bool=true)
     input_cgyro = InputCGYRO()
 
     eq = dd.equilibrium
@@ -239,30 +239,31 @@ function InputCGYRO(dd::IMAS.dd, gridpoint_cp::Integer, lump_ions::Bool; MXH_mod
         setproperty!(input_cgyro, Symbol("DLNTDR_$species"), dlntidr)
     end
     i  = length(ions)
-    for iion in eachindex(ions)
+    if fast_ions
+        for iion in eachindex(ions)
+            if ions[iion].density_fast[gridpoint_cp] != 0
+                i+=1
+                Ti =  ((2 * ions[iion].pressure_fast_perpendicular + ions[iion].pressure_fast_parallel)
+                        ./ ions[iion].density_fast ./ IMAS.mks.e ./ t_norm)
 
-        if ions[iion].density_fast[gridpoint_cp] != 0
-            i+=1
-            Ti =  ((2 * ions[iion].pressure_fast_perpendicular + ions[iion].pressure_fast_parallel)
-                    ./ ions[iion].density_fast ./ IMAS.mks.e ./ t_norm)
+                dlntidr = -IMAS.calc_z(rmin ./ a, Ti, :backward)
+                Ti = Ti[gridpoint_cp]
+                dlntidr = dlntidr[gridpoint_cp]
 
-            dlntidr = -IMAS.calc_z(rmin ./ a, Ti, :backward)
-            Ti = Ti[gridpoint_cp]
-            dlntidr = dlntidr[gridpoint_cp]
+                Zi = IMAS.avgZ(ions[iion].element[1].z_n, Ti * t_norm)
+                setproperty!(input_cgyro, Symbol("Z_$i"), Zi)
+                setproperty!(input_cgyro, Symbol("MASS_$i"), ions[iion].element[1].a .* mp / md)
 
-            Zi = IMAS.avgZ(ions[iion].element[1].z_n, Ti * t_norm)
-            setproperty!(input_cgyro, Symbol("Z_$i"), Zi)
-            setproperty!(input_cgyro, Symbol("MASS_$i"), ions[iion].element[1].a .* mp / md)
+                ni = ions[iion].density_fast ./ m³_to_cm³ / n_norm
+                dlnnidr = -IMAS.calc_z(rmin ./ a, ni, :backward)
+                ni = ni[gridpoint_cp]
+                dlnnidr = dlnnidr[gridpoint_cp]
 
-            ni = ions[iion].density_fast ./ m³_to_cm³ / n_norm
-            dlnnidr = -IMAS.calc_z(rmin ./ a, ni, :backward)
-            ni = ni[gridpoint_cp]
-            dlnnidr = dlnnidr[gridpoint_cp]
-
-            setproperty!(input_cgyro, Symbol("TEMP_$i"), Ti)
-            setproperty!(input_cgyro, Symbol("DENS_$i"), ni)
-            setproperty!(input_cgyro, Symbol("DLNNDR_$i"), dlnnidr)
-            setproperty!(input_cgyro, Symbol("DLNTDR_$i"), dlntidr)
+                setproperty!(input_cgyro, Symbol("TEMP_$i"), Ti)
+                setproperty!(input_cgyro, Symbol("DENS_$i"), ni)
+                setproperty!(input_cgyro, Symbol("DLNNDR_$i"), dlnnidr)
+                setproperty!(input_cgyro, Symbol("DLNTDR_$i"), dlntidr)
+            end
         end
     end
 
