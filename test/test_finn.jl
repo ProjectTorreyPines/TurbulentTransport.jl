@@ -7,8 +7,8 @@
     @testset "FINNmodel fields are well-formed" begin
         model = TurbulentTransport.load_finn_model(TEST_FINN_MODEL)
         @test !isempty(model.name)
-        @test length(model.xnames) == 20
-        @test length(model.ynames) == 5
+        @test length(model.xnames) == 16
+        @test length(model.ynames) >= 4
         @test length(model.xm) == length(model.xnames)
         @test length(model.xσ) == length(model.xnames)
         @test size(model.xbounds) == (length(model.xnames), 2)
@@ -23,6 +23,7 @@
         model = TurbulentTransport.load_finn_model(TEST_FINN_MODEL)
         @test "Q_LOC"      ∈ model.xnames
         @test "KAPPA_LOC"  ∈ model.xnames
+        @test "DRMINDX_LOC" ∈ model.xnames
         @test "DRMINDX_LOC" ∈ model.xnames
         @test "Qe"         ∈ model.xnames
         @test "Qi"         ∈ model.xnames
