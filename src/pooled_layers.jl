@@ -118,7 +118,7 @@ This is an internal function used by `PooledChain` to optimize inference.
     d = pd.dense
     Flux._size_check(d, x, 1 => size(d.weight, 2))
     xT = Flux._match_eltype(d, x)
-    out = acquire!(pool, Float64, size(d.weight, 1), size(xT, 2))
+    out = acquire_view!(pool, Float64, size(d.weight, 1), size(xT, 2))
     mul!(out, d.weight, xT)
     return Flux.NNlib.bias_act!(d.σ, out, d.bias)
 end
@@ -128,21 +128,21 @@ end
     d = pd.dense
     Flux._size_check(d, x, 1 => size(d.weight, 2))
     xT = Flux._match_eltype(d, x)
-    out = acquire!(pool, Float64, size(d.weight, 1))
+    out = acquire_view!(pool, Float64, size(d.weight, 1))
     mul!(out, d.weight, xT)
     return Flux.NNlib.bias_act!(d.σ, out, d.bias)
 end
 
 # PooledActivation - Matrix path
 @inline function _forward_with_pool(pa::PooledActivation, x::AbstractMatrix, pool)
-    out = acquire!(pool, Float64, size(x))
+    out = acquire_view!(pool, Float64, size(x))
     out .= pa.σ.(x)
     return out
 end
 
 # PooledActivation - Vector path
 @inline function _forward_with_pool(pa::PooledActivation, x::AbstractVector, pool)
-    out = acquire!(pool, Float64, length(x))
+    out = acquire_view!(pool, Float64, length(x))
     out .= pa.σ.(x)
     return out
 end
