@@ -352,8 +352,8 @@ using TurbulentTransport: poolify, PooledChain, PooledDense, PooledActivation, P
     @testset "PooledChain all available models" begin
         all_models = available_models()
 
-        # Filter to .bson files only (skip directories/symlinks for speed)
-        bson_models = filter(m -> !contains(m, "/") && (endswith(m, ".bson") || !contains(m, ".")), all_models)
+        # Filter to TGLF-NN .bson files only (skip FINN models, directories/symlinks)
+        bson_models = filter(m -> !contains(m, "/") && !startswith(m, "finn_") && (endswith(m, ".bson") || !contains(m, ".")), all_models)
 
         # Test a subset for CI speed (full test can be run manually)
         test_subset = first(bson_models, 10)
