@@ -1,7 +1,7 @@
 name = "TurbulentTransport"
 uuid = "9bf5e8f4-5746-4003-bc69-ef83265c10ca"
 authors = ["Orso Meneghini <orso82@gmail.com>", "Tom Neiser <neisert@fusion.gat.com>"]
-version = "1.1.4"
+version = "1.2.1"
 
 [deps]
 AdaptiveArrayPools = "4f381ef7-9af0-4cbe-99d4-cf36d7b0f233"
@@ -27,7 +27,7 @@ TokamakEnergyTransport = "974ab28f-c96e-482d-8977-2c30e3278f36"
 TokamakEnergyTransportExt = "TokamakEnergyTransport"
 
 [compat]
-AdaptiveArrayPools = "0.1"
+AdaptiveArrayPools = "0.3.6"
 BSON = "0.3"
 Flux = "0.14, 0.15, 0.16"
 GACODE = "1.0.4"

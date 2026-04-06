@@ -273,6 +273,29 @@ const EXPECTED_WITHNEGD_GKNN_EDGE = [
     (ENERGY_FLUX_e = 44.76493473777022,  ENERGY_FLUX_i = 75.97364835822846,   PARTICLE_FLUX_e = 12.749389144163326, STRESS_TOR_i = 86.82843914976294),
 ]
 
+# ============================================
+# FINN Test Constants
+# ============================================
+
+const TEST_FINN_MODEL = "finn_sat3_d3d_withnegD"
+
+# Midpoint of training bounds input → expected outputs
+# Captured 2026-04-01. ynames order: RLNS_1, RLNS_2, RLTS_1, RLTS_2, VEXB_SHEAR
+const EXPECTED_FINN_MIDPOINT = (
+    RLTS_1     =  2.7906991467656845,
+    RLTS_2     =  1.70271305966974,
+    RLNS_1     =  1.5691446730152112,
+    VEXB_SHEAR = -0.0036021624654632954,
+)
+
+# Column-1 of matrix prediction (same input, first of three columns)
+const EXPECTED_FINN_MATRIX_COL1 = (
+    RLTS_1     =  2.7906991467656836,
+    RLTS_2     =  1.70271305966974,
+    RLNS_1     =  1.5691446730152108,
+    VEXB_SHEAR = -0.003602162465463306,
+)
+
 # Model configurations for regression testing
 const REGRESSION_MODEL_CONFIGS = [
     ("sat3_em_d3d_azf-1", :TGLFNN, "TGLFNN baseline"),

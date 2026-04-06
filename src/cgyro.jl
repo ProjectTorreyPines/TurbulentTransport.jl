@@ -173,7 +173,7 @@ Base.@kwdef mutable struct InputCGYRO
     H_PRINT_FLAG::Union{Int64,Missing} = missing
 end
 
-function InputCGYRO(dd::IMAS.dd, gridpoint_cp::Integer, lump_ions::Bool)
+function InputCGYRO(dd::IMAS.dd, gridpoint_cp::Integer, lump_ions::Bool; MXH_modes::Int=1, fast_ions::Bool=true)
     input_cgyro = InputCGYRO()
 
     eq = dd.equilibrium
@@ -238,9 +238,37 @@ function InputCGYRO(dd::IMAS.dd, gridpoint_cp::Integer, lump_ions::Bool)
         setproperty!(input_cgyro, Symbol("DLNNDR_$species"), dlnnidr)
         setproperty!(input_cgyro, Symbol("DLNTDR_$species"), dlntidr)
     end
+    i  = length(ions)
+    if fast_ions
+        for iion in eachindex(ions)
+            if ions[iion].density_fast[gridpoint_cp] != 0
+                i+=1
+                Ti =  ((2 * ions[iion].pressure_fast_perpendicular + ions[iion].pressure_fast_parallel)
+                        ./ ions[iion].density_fast ./ IMAS.mks.e ./ t_norm)
+
+                dlntidr = -IMAS.calc_z(rmin ./ a, Ti, :backward)
+                Ti = Ti[gridpoint_cp]
+                dlntidr = dlntidr[gridpoint_cp]
+
+                Zi = IMAS.avgZ(ions[iion].element[1].z_n, Ti * t_norm)
+                setproperty!(input_cgyro, Symbol("Z_$i"), Zi)
+                setproperty!(input_cgyro, Symbol("MASS_$i"), ions[iion].element[1].a .* mp / md)
+
+                ni = ions[iion].density_fast ./ m³_to_cm³ / n_norm
+                dlnnidr = -IMAS.calc_z(rmin ./ a, ni, :backward)
+                ni = ni[gridpoint_cp]
+                dlnnidr = dlnnidr[gridpoint_cp]
+
+                setproperty!(input_cgyro, Symbol("TEMP_$i"), Ti)
+                setproperty!(input_cgyro, Symbol("DENS_$i"), ni)
+                setproperty!(input_cgyro, Symbol("DLNNDR_$i"), dlnnidr)
+                setproperty!(input_cgyro, Symbol("DLNTDR_$i"), dlntidr)
+            end
+        end
+    end
 
     # electrons last for CGYRO
-    i = length(ions) + 1
+    i += 1
     setproperty!(input_cgyro, Symbol("DENS_$i"), ne / n_norm)
     setproperty!(input_cgyro, Symbol("TEMP_$i"), Te / t_norm)
     setproperty!(input_cgyro, Symbol("MASS_$i"), me / md)
@@ -248,40 +276,85 @@ function InputCGYRO(dd::IMAS.dd, gridpoint_cp::Integer, lump_ions::Bool)
     setproperty!(input_cgyro, Symbol("DLNNDR_$i"), dlnnedr)
     setproperty!(input_cgyro, Symbol("DLNTDR_$i"), dlntedr)
 
-    input_cgyro.N_SPECIES = length(ions) + 1 # add 1 to include electrons
+    input_cgyro.N_SPECIES = i
 
     c_s = GACODE.c_s(cp1d)[gridpoint_cp]
     loglam = 24.0 - log(sqrt(ne) / (Te))
     nu_ee = (a / c_s) * (loglam * 4 * pi * ne * e^4) / ((2 * k * Te)^(3 / 2) * me^(1 / 2))
     input_cgyro.NU_EE = nu_ee
 
-    kappa = IMAS.interp1d(eqt1d.rho_tor_norm, eqt1d.elongation).(cp1d.grid.rho_tor_norm)
-    input_cgyro.KAPPA = kappa[gridpoint_cp]
+    if MXH_modes > 1
+        coeffs = IMAS.rec_to_mxh_coeffs(dd; MXH_modes)
+        ns = size(coeffs, 2)
+        rho_eq_s = eqt1d.rho_tor_norm[1:ns]
+        L = MXH_modes
+        n_shape = min(L, 3)
 
-    skappa = rmin .* IMAS.gradient(rmin, kappa) ./ kappa
-    input_cgyro.S_KAPPA = skappa[gridpoint_cp]
+        Rmaj = IMAS.interp1d(rho_eq_s, m_to_cm .* coeffs[1, :]).(cp1d.grid.rho_tor_norm)
+        input_cgyro.RMAJ = Rmaj[gridpoint_cp] / a
 
-    drmaj = IMAS.gradient(rmin, Rmaj)
-    input_cgyro.SHIFT = drmaj[gridpoint_cp]
+        Z0_mxh = IMAS.interp1d(rho_eq_s, m_to_cm .* coeffs[2, :]).(cp1d.grid.rho_tor_norm)
+        input_cgyro.ZMAG = Z0_mxh[gridpoint_cp] / a
+        input_cgyro.DZMAG = IMAS.gradient(rmin, Z0_mxh)[gridpoint_cp]
 
-    delta = IMAS.interp1d(eqt1d.rho_tor_norm, 0.5 * (eqt1d.triangularity_lower + eqt1d.triangularity_upper)).(cp1d.grid.rho_tor_norm)
-    input_cgyro.DELTA = delta[gridpoint_cp]
-    sdelta = rmin .* IMAS.gradient(rmin, delta)
-    input_cgyro.S_DELTA = sdelta[gridpoint_cp]
+        kappa = IMAS.interp1d(rho_eq_s, coeffs[4, :]).(cp1d.grid.rho_tor_norm)
+        input_cgyro.KAPPA = kappa[gridpoint_cp]
+        skappa = rmin .* IMAS.gradient(rmin, kappa) ./ kappa
+        input_cgyro.S_KAPPA = skappa[gridpoint_cp]
 
-    zeta =
-        IMAS.interp1d(
-            eqt1d.rho_tor_norm,
-            0.25 * (eqt1d.squareness_lower_inner .+ eqt1d.squareness_lower_outer .+ eqt1d.squareness_upper_inner .+ eqt1d.squareness_upper_outer)
-        ).(cp1d.grid.rho_tor_norm)
-    input_cgyro.ZETA = zeta[gridpoint_cp]
-    szeta = rmin .* IMAS.gradient(rmin, zeta)
-    input_cgyro.S_ZETA = szeta[gridpoint_cp]
+        drmaj = IMAS.gradient(rmin, Rmaj)
+        input_cgyro.SHIFT = drmaj[gridpoint_cp]
 
-    Z0 = IMAS.interp1d(eqt1d.rho_tor_norm, eqt1d.geometric_axis.z * 1e2).(cp1d.grid.rho_tor_norm)
-    input_cgyro.ZMAG = Z0[gridpoint_cp] / a
-    sZ0 = IMAS.gradient(rmin, Z0)
-    input_cgyro.DZMAG = sZ0[gridpoint_cp]
+        s1_mxh = IMAS.interp1d(rho_eq_s, coeffs[5+L+1, :]).(cp1d.grid.rho_tor_norm)  # asin(δ)
+        s2_mxh = IMAS.interp1d(rho_eq_s, coeffs[5+L+2, :]).(cp1d.grid.rho_tor_norm)  # -ζ
+
+        input_cgyro.DELTA = sin(s1_mxh[gridpoint_cp])
+        input_cgyro.S_DELTA = (rmin .* IMAS.gradient(rmin, s1_mxh))[gridpoint_cp]
+
+        input_cgyro.ZETA = -s2_mxh[gridpoint_cp]
+        input_cgyro.S_ZETA = -(rmin .* IMAS.gradient(rmin, s2_mxh))[gridpoint_cp]
+
+        c_mxh  = [IMAS.interp1d(rho_eq_s, coeffs[5+m, :]).(cp1d.grid.rho_tor_norm) for m in 0:n_shape]
+        dc_mxh = [rmin .* IMAS.gradient(rmin, c_mxh[i]) for i in eachindex(c_mxh)]
+        for m in 0:n_shape
+            setproperty!(input_cgyro, Symbol("SHAPE_COS$m"),   c_mxh[m+1][gridpoint_cp])
+            setproperty!(input_cgyro, Symbol("SHAPE_S_COS$m"), dc_mxh[m+1][gridpoint_cp])
+        end
+
+        if n_shape >= 3
+            s3_mxh  = IMAS.interp1d(rho_eq_s, coeffs[5+L+3, :]).(cp1d.grid.rho_tor_norm)
+            input_cgyro.SHAPE_SIN3   = s3_mxh[gridpoint_cp]
+            input_cgyro.SHAPE_S_SIN3 = (rmin .* IMAS.gradient(rmin, s3_mxh))[gridpoint_cp]
+        end
+    else
+        kappa = IMAS.interp1d(eqt1d.rho_tor_norm, eqt1d.elongation).(cp1d.grid.rho_tor_norm)
+        input_cgyro.KAPPA = kappa[gridpoint_cp]
+
+        skappa = rmin .* IMAS.gradient(rmin, kappa) ./ kappa
+        input_cgyro.S_KAPPA = skappa[gridpoint_cp]
+
+        drmaj = IMAS.gradient(rmin, Rmaj)
+        input_cgyro.SHIFT = drmaj[gridpoint_cp]
+
+        delta = IMAS.interp1d(eqt1d.rho_tor_norm, 0.5 * (eqt1d.triangularity_lower + eqt1d.triangularity_upper)).(cp1d.grid.rho_tor_norm)
+        input_cgyro.DELTA = delta[gridpoint_cp]
+        sdelta = rmin .* IMAS.gradient(rmin, delta)
+        input_cgyro.S_DELTA = sdelta[gridpoint_cp]
+
+        zeta =
+            IMAS.interp1d(
+                eqt1d.rho_tor_norm,
+                0.25 * (eqt1d.squareness_lower_inner .+ eqt1d.squareness_lower_outer .+ eqt1d.squareness_upper_inner .+ eqt1d.squareness_upper_outer)
+            ).(cp1d.grid.rho_tor_norm)
+        input_cgyro.ZETA = zeta[gridpoint_cp]
+        szeta = rmin .* IMAS.gradient(rmin, zeta)
+        input_cgyro.S_ZETA = szeta[gridpoint_cp]
+
+        Z0 = IMAS.interp1d(eqt1d.rho_tor_norm, eqt1d.geometric_axis.z * 1e2).(cp1d.grid.rho_tor_norm)
+        input_cgyro.ZMAG = Z0[gridpoint_cp] / a
+        sZ0 = IMAS.gradient(rmin, Z0)
+        input_cgyro.DZMAG = sZ0[gridpoint_cp]
+    end
 
     q_profile = IMAS.interp1d(eqt1d.rho_tor_norm, eqt1d.q).(cp1d.grid.rho_tor_norm)
     q = q_profile[gridpoint_cp]
