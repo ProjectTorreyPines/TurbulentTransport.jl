@@ -16,6 +16,7 @@ Measurements = "eff96d63-e80a-5855-80a2-b1b0885c5ab7"
 Memoize = "c03570c3-d221-55d1-a50c-7939bbd78826"
 ONNXNaiveNASflux = "2e935253-ba83-4645-9154-13ffeb13a688"
 ONNXRunTime = "e034b28e-924e-41b2-b98f-d2bbeb830c6a"
+Serialization = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
 StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 TJLF = "12ecd31c-256b-4db5-a799-cd5afeb0bd7d"
 

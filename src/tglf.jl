@@ -340,6 +340,28 @@ function load(input_tglf::InputTGLF, filename::String)
 end
 
 """
+    gacode_preamble() -> String
+
+Return a shell preamble that sources the GACODE environment on NERSC Perlmutter.
+Returns an empty string on non-NERSC systems where GACODE is assumed to be in PATH.
+"""
+function gacode_preamble()
+    if get(ENV, "NERSC_HOST", "") == "perlmutter"
+        gacode_root = get(ENV, "GACODE_ROOT_CPU", "")
+        isempty(gacode_root) && error("Environment variable GACODE_ROOT_CPU is not set. " *
+            "Set it to your CPU GACODE installation path, e.g. export GACODE_ROOT_CPU=/path/to/gacode")
+        gacode_platform = "PERLMUTTER_CPU"
+        return """
+        export GACODE_ROOT=$gacode_root
+        export GACODE_PLATFORM=$gacode_platform
+        . \${GACODE_ROOT}/shared/bin/gacode_setup 2>/dev/null
+        . \${GACODE_ROOT}/platform/env/env.\${GACODE_PLATFORM} 2>/dev/null
+        """
+    end
+    return ""
+end
+
+"""
     run_tglf(input_tglf::InputTGLF)
 
 Run TGLF starting from a InputTGLF.
@@ -351,10 +373,12 @@ function run_tglf(input_tglf::InputTGLF)
 
     save(input_tglf, joinpath(folder, "input.tglf"))
 
+    preamble = gacode_preamble()
     open(joinpath(folder, "command.sh"), "w") do io
         return write(
             io,
             """
+         $preamble
          if command -v timeout &> /dev/null; then
          	(time (timeout 120 tglf -n 1 -e .)) &> command.log
          else
