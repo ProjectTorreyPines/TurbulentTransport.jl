@@ -1,8 +1,9 @@
 using TurbulentTransport: InputTGLF, InputCGYRO, InputQLGYRO
 using TurbulentTransport: tglf_to_cgyro, generate_ky_grid, qlgyro_run_hash,
     QLGYRORunState, save_run_state, load_run_state,
-    check_cgyro_convergence, parse_cgyro_eigenvalue, parse_cgyro_qlflux
-using TJLF
+    check_cgyro_convergence, parse_cgyro_eigenvalue, parse_cgyro_qlflux,
+    compute_qlgyro_fluxes
+using TurbulentTransport.TJLF
 
 # ============================================================================
 # Reference values
@@ -448,8 +449,7 @@ const REF_CASE2 = (
                 @test size(result) == (n_species, n_field, n_moments)
 
                 # Verify it's from the last timestep (t=5)
-                # With Fortran column-major reshape (3, 3, 3, 5),
-                # the last slice [:,:,:,5] then permuted (3,2,1) gives species-major output
+                # CGYRO Fortran writes (n_species, n_flux, n_field, n_time) column-major
                 @test all(result .!= 0)
             end
         end
@@ -470,9 +470,9 @@ const REF_CASE2 = (
 
                 result = parse_cgyro_qlflux(tmpdir, n_species, n_field)
                 @test size(result) == (n_species, n_field, n_moments)
-                # Verify data matches Fortran column-major reshape + permutation
-                raw_4d = reshape(data, n_moments, n_field, n_species, 1)
-                expected = permutedims(raw_4d[:, :, :, 1], (3, 2, 1))
+                # CGYRO Fortran column-major: (n_species, n_flux, n_field, n_time)
+                raw_4d = reshape(data, n_species, n_moments, n_field, 1)
+                expected = permutedims(raw_4d[:, :, :, 1], (1, 3, 2))
                 @test result ≈ expected
             end
         end
@@ -500,6 +500,66 @@ const REF_CASE2 = (
         # Verify first ion is D (ZS_2=1.0, MASS_2=1.0)
         @test ic.Z_1 ≈ 1.0
         @test ic.MASS_1 ≈ 1.0
+    end
+
+    # ========================================================================
+    @testset "compute_qlgyro_fluxes with fixture data" begin
+        # Uses real CGYRO output from 3 ky points (ky=0.1, 0.5, 1.0)
+        fixture_dir = joinpath(@__DIR__, "data", "sample_qlgyro")
+        if isdir(fixture_dir)
+            input_tglf = load_sample_input()
+
+            ky_values = [0.1, 0.5, 1.0]
+            nky = length(ky_values)
+            state = QLGYRORunState(
+                fixture_dir,
+                ky_values,
+                fill("", nky),
+                fill(true, nky),
+                fill(true, nky),
+                UInt64(0)
+            )
+
+            result = compute_qlgyro_fluxes(input_tglf, state)
+
+            @testset "Returns FluxSolution" begin
+                @test result isa TurbulentTransport.GACODE.FluxSolution
+            end
+
+            @testset "Fluxes are finite" begin
+                @test isfinite(result.ENERGY_FLUX_e)
+                @test isfinite(result.ENERGY_FLUX_i)
+                @test isfinite(result.PARTICLE_FLUX_e)
+                @test all(isfinite.(result.PARTICLE_FLUX_i))
+                @test all(isfinite.(result.STRESS_TOR_i))
+            end
+
+            @testset "Parse fixture eigenvalues" begin
+                # KY_1 (ky=0.1): positive growth rate
+                freq1, gamma1 = parse_cgyro_eigenvalue(joinpath(fixture_dir, "KY_1"))
+                @test gamma1 > 0
+                @test gamma1 ≈ 1.8339e-02 rtol=1e-3
+
+                # KY_2 (ky=0.5): positive growth rate
+                freq2, gamma2 = parse_cgyro_eigenvalue(joinpath(fixture_dir, "KY_2"))
+                @test gamma2 > 0
+                @test gamma2 ≈ 1.0611e-01 rtol=1e-3
+
+                # KY_3 (ky=1.0): negative growth rate (stable)
+                freq3, gamma3 = parse_cgyro_eigenvalue(joinpath(fixture_dir, "KY_3"))
+                @test gamma3 < 0
+            end
+
+            @testset "Parse fixture QL fluxes" begin
+                for iky in 1:3
+                    ql = parse_cgyro_qlflux(joinpath(fixture_dir, "KY_$iky"), 3, 3)
+                    @test size(ql) == (3, 3, 3)
+                    @test any(ql .!= 0)
+                end
+            end
+        else
+            @warn "Skipping compute_qlgyro_fluxes test: fixture data not found at $fixture_dir"
+        end
     end
 
 end
