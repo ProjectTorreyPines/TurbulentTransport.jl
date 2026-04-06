@@ -135,5 +135,36 @@ import Flux
         @test !isempty(repr(MIME"text/plain"(), ensemble))
         @test !isempty(repr(MIME"text/plain"(), model))
     end
+
+    @testset "register_model_path!" begin
+        saved = copy(TurbulentTransport._MODEL_SEARCH_PATHS)
+        try
+            mktempdir() do tmpdir
+                TurbulentTransport.register_model_path!(tmpdir)
+                @test first(TurbulentTransport._MODEL_SEARCH_PATHS) == tmpdir
+
+                # prepend=false appends to end
+                tmpdir2 = mktempdir()
+                TurbulentTransport.register_model_path!(tmpdir2; prepend=false)
+                @test last(TurbulentTransport._MODEL_SEARCH_PATHS) == tmpdir2
+            end
+        finally
+            empty!(TurbulentTransport._MODEL_SEARCH_PATHS)
+            append!(TurbulentTransport._MODEL_SEARCH_PATHS, saved)
+        end
+    end
+
+    @testset "resolve_model_path" begin
+        # Absolute path to existing file
+        path = TurbulentTransport.resolve_model_path("sat0_em_d3d")
+        @test isfile(path)
+        @test endswith(path, ".bson")
+
+        # Direct file path resolves immediately
+        @test TurbulentTransport.resolve_model_path(path) == path
+
+        # Nonexistent model throws
+        @test_throws ErrorException TurbulentTransport.resolve_model_path("nonexistent_zzz")
+    end
 end
 

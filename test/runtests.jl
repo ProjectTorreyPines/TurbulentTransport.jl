@@ -29,4 +29,5 @@ else
     include("test_input_tglfs.jl")
     include("test_pooled_chain.jl")
     include("test_model_selector.jl")
+    include("test_qlgyro.jl")
 end

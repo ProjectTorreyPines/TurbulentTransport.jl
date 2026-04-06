@@ -40,8 +40,8 @@ Base.@kwdef mutable struct InputCGYRO
     BETAE_UNIT::Union{Float64,Missing} = missing
     BETAE_UNIT_SCALE::Union{Float64,Missing} = missing
     BETA_STAR_SCALE::Union{Float64,Missing} = missing
-    LAMBDA_DEBYE::Union{Float64,Missing} = missing
-    LAMBDA_DEBYE_SCALE::Union{Float64,Missing} = missing
+    LAMBDA_STAR::Union{Float64,Missing} = missing
+    LAMBDA_STAR_SCALE::Union{Float64,Missing} = missing
 
     N_RADIAL::Union{Int,Missing} = missing
     BOX_SIZE::Union{Int,Missing} = missing
