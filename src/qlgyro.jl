@@ -609,10 +609,11 @@ function parse_cgyro_qlflux(rundir::String, n_species::Int, n_field::Int)
         return zeros(Float32, n_species, n_field, 3)
     end
 
-    # Reshape: (n_time, n_species, n_field, 3_moments)
-    all_data = reshape(data, 3, n_field, n_species, n_time)
-    # Last time step, reorder to (n_species, n_field, 3_moments)
-    return permutedims(all_data[:, :, :, end], (3, 2, 1))
+    # CGYRO Fortran writes gflux(0, :, 1:nflux, :, :) in column-major order:
+    #   (n_species, n_flux_types, n_field, n_time) — species varies fastest
+    all_data = reshape(data, n_species, 3, n_field, n_time)
+    # Last time step → (n_species, 3_moments, n_field), reorder to (n_species, n_field, 3_moments)
+    return permutedims(all_data[:, :, :, end], (1, 3, 2))
 end
 
 """
