@@ -125,6 +125,23 @@ function tglf_to_cgyro(input_tglf::InputTGLF)
     ic.DZMAG = input_tglf.DZMAJDX_LOC
     ic.SHIFT = input_tglf.DRMAJDX_LOC
 
+    # Higher-order MXH shaping coefficients (copy fields that exist in both structs)
+    cgyro_fields = fieldnames(typeof(ic))
+    for m in 0:3
+        for prefix in ("SHAPE_COS", "SHAPE_S_COS")
+            sym = Symbol("$(prefix)$m")
+            sym in cgyro_fields || continue
+            val = getproperty(input_tglf, sym)
+            ismissing(val) || setproperty!(ic, sym, val)
+        end
+    end
+    for prefix in ("SHAPE_SIN", "SHAPE_S_SIN")
+        sym = Symbol("$(prefix)3")
+        sym in cgyro_fields || continue
+        val = getproperty(input_tglf, sym)
+        ismissing(val) || setproperty!(ic, sym, val)
+    end
+
     # Magnetic shear conversion:
     # TGLF: Q_PRIME_LOC = q * (a²/r) * dq/dr (from tglf.jl IMAS constructor)
     # CGYRO: S = (r/q) * dq/dr
