@@ -384,6 +384,20 @@ const REF_CASE2 = (
                 @test check_cgyro_convergence(tmpdir) == :error
             end
         end
+
+        @testset "Terminated at max time" begin
+            mktempdir() do tmpdir
+                write(joinpath(tmpdir, "out.cgyro.info"), "INFO: terminated at max time\n")
+                @test check_cgyro_convergence(tmpdir) == :terminated
+            end
+        end
+
+        @testset "Running without timefile" begin
+            mktempdir() do tmpdir
+                write(joinpath(tmpdir, "out.cgyro.info"), "INFO: (CGYRO) Restart\n")
+                @test check_cgyro_convergence(tmpdir) == :running
+            end
+        end
     end
 
     # ========================================================================

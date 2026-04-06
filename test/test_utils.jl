@@ -157,4 +157,29 @@ using GACODE
         # Should be a deepcopy, not same object
         @test inputs[1] !== input
     end
+
+    @testset "save InputCGYRO" begin
+        input_tglf = load_sample_input()
+        ic = TurbulentTransport.tglf_to_cgyro(input_tglf)
+        mktempdir() do tmpdir
+            path = joinpath(tmpdir, "input.cgyro")
+            TurbulentTransport.save(ic, path)
+            @test isfile(path)
+            content = read(path, String)
+            @test contains(content, "N_SPECIES")
+            @test contains(content, "N_FIELD")
+        end
+    end
+
+    @testset "save InputQLGYRO" begin
+        iq = TurbulentTransport.InputQLGYRO(NKY=16, KYGRID_MODEL=1)
+        mktempdir() do tmpdir
+            path = joinpath(tmpdir, "input.qlgyro")
+            TurbulentTransport.save(iq, path)
+            @test isfile(path)
+            content = read(path, String)
+            @test contains(content, "NKY=16")
+            @test contains(content, "KYGRID_MODEL=1")
+        end
+    end
 end
