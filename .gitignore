@@ -36,4 +36,9 @@ Manifest.toml
 
 # temp/test files
 test.json
+
+# CGYRO batch job artifacts
+examples/batch.src
+examples/batch.out
+examples/batch.err
 asd.jl

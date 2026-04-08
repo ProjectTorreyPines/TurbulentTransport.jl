@@ -1,4 +1,5 @@
 using Serialization
+import Dates
 
 Base.@kwdef mutable struct InputQLGYRO
     N_PARALLEL::Union{Int,Missing} = missing
@@ -667,9 +668,17 @@ function run_qlgyro(input_tglf::InputTGLF;
 
     # Step 3: Setup run directory (must be on a shared filesystem, not /tmp which is node-local)
     if isempty(basedir)
-        scratch = get(ENV, "PSCRATCH", get(ENV, "SCRATCH", ""))
-        tmproot = isempty(scratch) ? tempdir() : scratch
-        basedir = mktempdir(tmproot; prefix="qlgyro_", cleanup=false)
+        preferred = "/global/cfs/cdirs/m3739/results/FUSE/QLGYRO"
+        if isdir(preferred) || (try mkpath(preferred); true catch; false end)
+            tmproot = preferred
+        else
+            scratch = get(ENV, "PSCRATCH", get(ENV, "SCRATCH", ""))
+            tmproot = isempty(scratch) ? tempdir() : scratch
+        end
+        username = get(ENV, "USER", get(ENV, "USERNAME", "user"))
+        timestamp = Dates.format(Dates.now(), "yyyymmdd_HHMMSS")
+        basedir = joinpath(tmproot, "qlgyro_$(username)_$(timestamp)")
+        mkpath(basedir)
         @info "QLGYRO run directory: $basedir"
     end
     mkpath(basedir)
@@ -866,7 +875,7 @@ end
 
 Parse CGYRO outputs and apply TJLF saturation rules to compute quasilinear fluxes.
 """
-function compute_qlgyro_fluxes(input_tglf::InputTGLF, state::QLGYRORunState)
+function compute_qlgyro_fluxes(input_tglf::InputTGLF, state::QLGYRORunState; sat_rule::Union{Int,Nothing}=nothing, alpha_zf::Union{Real,Nothing}=nothing)
     ns = input_tglf.NS  # total species (TGLF ordering: e, ion1, ion2, ...)
     nky = length(state.ky_values)
     nmodes = 1  # linear CGYRO gives dominant mode only
@@ -909,6 +918,15 @@ function compute_qlgyro_fluxes(input_tglf::InputTGLF, state::QLGYRORunState)
     input_tjlf = InputTJLF{Float64}(input_tglf.NS, nky)
     TJLF.update_input_tjlf!(input_tjlf, input_tglf)
 
+    # Apply optional overrides for saturation rule and zonal flow parameter
+    effective_sat_rule = something(sat_rule, input_tglf.SAT_RULE)
+    if sat_rule !== nothing
+        input_tjlf.SAT_RULE = sat_rule
+    end
+    if alpha_zf !== nothing
+        input_tjlf.ALPHA_ZF = Float64(alpha_zf)
+    end
+
     # Override ky grid settings
     # We set KYGRID_MODEL=0 because KY_SPECTRUM is pre-populated from the CGYRO runs;
     # sum_ky_spectrum uses KY_SPECTRUM directly and never reads KYGRID_MODEL or NKY.
@@ -943,7 +961,7 @@ function compute_qlgyro_fluxes(input_tglf::InputTGLF, state::QLGYRORunState)
 
     # For ExB shear spectral shift, compute first pass eigenvalues for SAT2/3
     vexb_shear_s = input_tjlf.VEXB_SHEAR * input_tjlf.SIGN_IT
-    if input_tglf.SAT_RULE in (2, 3)
+    if effective_sat_rule in (2, 3)
         vzf_out, kymax_out, jmax_out = TJLF.get_zonal_mixing(input_tjlf, satParams, gamma_cgyro)
         QL_flux_out, flux_spectrum = TJLF.sum_ky_spectrum(input_tjlf, satParams, gamma_matrix, QL_weights;
                                                            vzf_out_param=vzf_out,
