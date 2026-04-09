@@ -1,0 +1,14 @@
+{
+  "ky_values": [
+    0.1,
+    0.5,
+    1.0
+  ],
+  "n_species": 3,
+  "n_field": 3,
+  "source_mapping": {
+    "KY_1": "real_KY_1",
+    "KY_2": "real_KY_5",
+    "KY_3": "real_KY_10"
+  }
+}

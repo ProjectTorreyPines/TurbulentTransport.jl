@@ -1,7 +1,8 @@
 function Base.show(io::IO, ::MIME"text/plain", input_tglf::InputTGLF)
     for fname in sort!(collect(fieldnames(typeof(input_tglf))))
         value = getfield(input_tglf, fname)
-        if value !== missing && (!isdigit(string(fname)[end]) || (isdigit(string(fname)[end]) && parse(Int, split(string(fname), "_")[end]) <= input_tglf.NS))
+        species_idx = tryparse(Int, split(string(fname), "_")[end])
+        if value !== missing && (species_idx === nothing || species_idx <= input_tglf.NS)
             println(io, "$fname = $(value)")
         end
     end
