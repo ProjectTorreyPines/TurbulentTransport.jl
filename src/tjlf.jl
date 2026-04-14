@@ -11,6 +11,14 @@ const MODE_COLORS = Dict(ITG => :green, TEM => :orange, KBM => :violet, ETG => :
 const MODE_LABELS = Dict(ITG => "ITG", TEM => "TEM", KBM => "KBM", ETG => "ETG", MTM => "MTM")
 
 """
+    AbstractModeIdentification{T}
+
+Abstract supertype for all mode identification results.
+Subtypes must have fields `dominant_mode::TurbulenceMode` and `dominant_mode_fraction::T`.
+"""
+abstract type AbstractModeIdentification{T<:Real} end
+
+"""
     TJLFModeIdentification{T<:Real}
 
 Results of turbulence mode identification from a TJLF run at a single radial location.
@@ -23,7 +31,7 @@ Results of turbulence mode identification from a TJLF run at a single radial loc
 - `ky_spectrum`: ky values used in the TJLF run
 - `flux_solution`: total quasilinear fluxes from the TJLF run
 """
-struct TJLFModeIdentification{T<:Real}
+struct TJLFModeIdentification{T<:Real} <: AbstractModeIdentification{T}
     mode_per_ky::Vector{TurbulenceMode}
     energy_flux_per_mode::Dict{TurbulenceMode,T}
     dominant_mode::TurbulenceMode
@@ -214,7 +222,7 @@ function identify_modes(input_tjlfs::Vector{InputTJLF{T}}; kw...) where {T<:Real
 end
 
 export TurbulenceMode, ITG, TEM, KBM, ETG, MTM
-export TJLFModeIdentification, identify_modes
+export AbstractModeIdentification, TJLFModeIdentification, identify_modes
 export MODE_COLORS, MODE_LABELS
 
 # ========== Original run_tjlf functions ==========
