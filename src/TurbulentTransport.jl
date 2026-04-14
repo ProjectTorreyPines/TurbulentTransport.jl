@@ -21,6 +21,8 @@ include("tglf_nn.jl")
 
 include("finn.jl")
 
+include("modeID.jl")
+
 include("cgyro.jl")
 
 include("qlgyro.jl")
