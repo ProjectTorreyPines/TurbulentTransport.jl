@@ -97,7 +97,7 @@ end
         y_vec = TurbulentTransport.predict_modeid(model, x_mid)
         X = hcat(x_mid, x_mid .* 1.05)
         Y_mat = TurbulentTransport.predict_modeid(model, X)
-        @test Y_mat[:, 1] ≈ y_vec rtol=REGRESSION_RTOL
+        @test Y_mat[:, 1] ≈ y_vec rtol=sqrt(eps(Float32))
     end
 
     @testset "predictions are deterministic" begin
