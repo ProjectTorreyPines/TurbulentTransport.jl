@@ -215,14 +215,15 @@ function run_modeid_nn(dd::IMAS.dd, rho_transport::AbstractVector{<:Real};
 
     output = predict_modeid(modeid_model, inputs)
 
+    output_modes = [_YNAME_TO_MODE[yn] for yn in modeid_model.ynames]
+
     # Convert output probabilities to NNModeIdentification structs
     results = Vector{NNModeIdentification{Float64}}(undef, N)
     for i in 1:N
         probs = Dict{TurbulenceMode,Float64}()
         max_prob = -Inf
         dominant = ITG
-        for (k, yname) in enumerate(modeid_model.ynames)
-            mode = _YNAME_TO_MODE[yname]
+        for (k, mode) in enumerate(output_modes)
             p = Float64(output[k, i])
             probs[mode] = p
             if p > max_prob
