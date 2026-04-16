@@ -48,6 +48,9 @@ struct PooledActivation{F}
     σ::F
 end
 
+# Fallback callable (no pool) — enables use outside @with_pool / PooledChain context
+@inline (pa::PooledActivation)(x) = pa.σ.(x)
+
 #= ====================================== =#
 #  PooledDense
 #= ====================================== =#
@@ -63,6 +66,9 @@ Requires `@with_pool` block at the outermost call site.
 struct PooledDense{D<:Flux.Dense}
     dense::D
 end
+
+# Fallback callable (no pool) — enables use outside @with_pool / PooledChain context
+@inline (pd::PooledDense)(x) = pd.dense(x)
 
 #= ====================================== =#
 #  PooledParallelAdd (ResNet skip connection)
@@ -118,7 +124,7 @@ This is an internal function used by `PooledChain` to optimize inference.
     d = pd.dense
     Flux._size_check(d, x, 1 => size(d.weight, 2))
     xT = Flux._match_eltype(d, x)
-    out = acquire_view!(pool, Float64, size(d.weight, 1), size(xT, 2))
+    out = acquire_view!(pool, eltype(xT), size(d.weight, 1), size(xT, 2))
     mul!(out, d.weight, xT)
     return Flux.NNlib.bias_act!(d.σ, out, d.bias)
 end
@@ -128,21 +134,21 @@ end
     d = pd.dense
     Flux._size_check(d, x, 1 => size(d.weight, 2))
     xT = Flux._match_eltype(d, x)
-    out = acquire_view!(pool, Float64, size(d.weight, 1))
+    out = acquire_view!(pool, eltype(xT), size(d.weight, 1))
     mul!(out, d.weight, xT)
     return Flux.NNlib.bias_act!(d.σ, out, d.bias)
 end
 
 # PooledActivation - Matrix path
 @inline function _forward_with_pool(pa::PooledActivation, x::AbstractMatrix, pool)
-    out = acquire_view!(pool, Float64, size(x))
+    out = acquire_view!(pool, eltype(x), size(x))
     out .= pa.σ.(x)
     return out
 end
 
 # PooledActivation - Vector path
 @inline function _forward_with_pool(pa::PooledActivation, x::AbstractVector, pool)
-    out = acquire_view!(pool, Float64, length(x))
+    out = acquire_view!(pool, eltype(x), length(x))
     out .= pa.σ.(x)
     return out
 end
@@ -267,35 +273,39 @@ end
 # Allocating versions (return owned Array via collect)
 # Uses _forward_with_pool to avoid repeated get_task_local_pool() calls
 function (pm::PooledChain)(x::AbstractMatrix)
+    T = eltype(x)
     pool = get_task_local_pool()
-    checkpoint!(pool, Float64)
-    result = collect(_forward_with_pool(pm.model, x, pool))::Matrix{Float64}
-    rewind!(pool, Float64)
+    checkpoint!(pool, T)
+    result = collect(_forward_with_pool(pm.model, x, pool))
+    rewind!(pool, T)
     return result
 end
 
 function (pm::PooledChain)(x::AbstractVector)
+    T = eltype(x)
     pool = get_task_local_pool()
-    checkpoint!(pool, Float64)
-    result = collect(_forward_with_pool(pm.model, x, pool))::Vector{Float64}
-    rewind!(pool, Float64)
+    checkpoint!(pool, T)
+    result = collect(_forward_with_pool(pm.model, x, pool))
+    rewind!(pool, T)
     return result
 end
 
 # In-place versions: pm(output, input) following Julia convention (mutated arg first)
 # Uses _forward_with_pool to avoid repeated get_task_local_pool() calls
 function (pm::PooledChain)(out::AbstractMatrix, x::AbstractMatrix)
+    T = eltype(x)
     pool = get_task_local_pool()
-    checkpoint!(pool, Float64)
+    checkpoint!(pool, T)
     copyto!(out, _forward_with_pool(pm.model, x, pool))
-    rewind!(pool, Float64)
+    rewind!(pool, T)
     return out
 end
 
 function (pm::PooledChain)(out::AbstractVector, x::AbstractVector)
+    T = eltype(x)
     pool = get_task_local_pool()
-    checkpoint!(pool, Float64)
+    checkpoint!(pool, T)
     copyto!(out, _forward_with_pool(pm.model, x, pool))
-    rewind!(pool, Float64)
+    rewind!(pool, T)
     return out
 end
