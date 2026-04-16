@@ -139,7 +139,7 @@ using AdaptiveArrayPools: AdaptiveArrayPool, acquire!, acquire_view!, @with_pool
         N = length(x_float)
         x_dual = [Dual{Nothing}(x_float[i], Partials(Tuple(Float64(j == i) for j in 1:N))) for i in 1:N]
 
-        # This should work through the pool — currently bypasses pool via fallback
+        # This should work through the pool natively (AdaptiveArrayPools supports Dual)
         y_dual = pm(x_dual)
 
         # Extract primal values — must match Float64 result
