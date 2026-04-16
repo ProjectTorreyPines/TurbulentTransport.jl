@@ -1,6 +1,9 @@
 [deps]
+AdaptiveArrayPools = "4f381ef7-9af0-4cbe-99d4-cf36d7b0f233"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 Flux = "587475ba-b771-5e3f-ad9e-33799f191a9c"
+ForwardDiff = "f6369f11-7733-5829-9624-2563aa707210"
 GACODE = "bb074124-7a58-47ce-bd41-6b7098184f23"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 TJLF = "12ecd31c-256b-4db5-a799-cd5afeb0bd7d"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
