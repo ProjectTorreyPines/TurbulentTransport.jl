@@ -48,7 +48,7 @@ struct PooledActivation{F}
     σ::F
 end
 
-# Fallback callable (no pool) — enables use inside plain Flux.Chain for non-Float64 types
+# Fallback callable (no pool) — enables use outside @with_pool / PooledChain context
 @inline (pa::PooledActivation)(x) = pa.σ.(x)
 
 #= ====================================== =#
@@ -67,7 +67,7 @@ struct PooledDense{D<:Flux.Dense}
     dense::D
 end
 
-# Fallback callable (no pool) — enables use inside plain Flux.Chain for non-Float64 types
+# Fallback callable (no pool) — enables use outside @with_pool / PooledChain context
 @inline (pd::PooledDense)(x) = pd.dense(x)
 
 #= ====================================== =#
