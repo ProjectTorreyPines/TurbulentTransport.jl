@@ -279,7 +279,8 @@ Processes `[N_features, M_samples]` matrix through the model and writes results 
     N, M = size(x)  # N = input features, M = samples
 
     # acquire! returns Array (not ReshapedArray) to avoid boxing with non-concrete _pooled_chain
-    xx = acquire!(pool, T, size(x))
+    # For non-Float64 (e.g., ForwardDiff.Dual), allocate regular arrays since pools are Float64-typed
+    xx = T === Float64 ? acquire!(pool, T, size(x)) : Matrix{T}(undef, size(x))
 
     # Apply log10 transform where needed (determined by feature name)
     @inbounds for i in 1:N
@@ -359,7 +360,8 @@ Processes one input vector through the model and writes results to `out_y`.
     N = length(x)
 
     # acquire! returns Array (not ReshapedArray) to avoid boxing with non-concrete _pooled_chain
-    xx = acquire!(pool, T, N)
+    # For non-Float64 (e.g., ForwardDiff.Dual), allocate regular arrays since pools are Float64-typed
+    xx = T === Float64 ? acquire!(pool, T, N) : Vector{T}(undef, N)
 
     # Apply log10 transform where needed (determined by feature name)
     for (ix, name) in enumerate(fluxmodel.xnames)
@@ -408,7 +410,7 @@ Sequential ensemble inference. Reuses single buffer across models (zero-alloc af
 """
 @with_pool pool function _flux_array_sequential!(all_yy::AbstractArray{T,3}, fluxensemble::TGLFNNensemble, x::AbstractArray{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
     nouts, nsamples, nmodels = size(all_yy)
-    each_y = acquire!(pool, T, nouts, nsamples)
+    each_y = T === Float64 ? acquire!(pool, T, nouts, nsamples) : Matrix{T}(undef, nouts, nsamples)
     for k in 1:nmodels
         flux_array!(each_y, fluxensemble.models[k], x; warn_nn_train_bounds=(warn_nn_train_bounds && k == 1), fidelity)
         all_yy[:, :, k] = each_y
@@ -418,7 +420,7 @@ end
 # Vector input variant
 @with_pool pool function _flux_array_sequential!(all_yy::AbstractMatrix{T}, fluxensemble::TGLFNNensemble, x::AbstractVector{T}; warn_nn_train_bounds::Bool=true, fidelity::Symbol=:TGLFNN) where {T<:Real}
     nouts, nmodels = size(all_yy)
-    each_y = acquire!(pool, T, nouts)
+    each_y = T === Float64 ? acquire!(pool, T, nouts) : Vector{T}(undef, nouts)
     for k in 1:nmodels
         flux_array!(each_y, fluxensemble.models[k], x; warn_nn_train_bounds=(warn_nn_train_bounds && k == 1), fidelity)
         all_yy[:, k] = each_y
@@ -434,7 +436,7 @@ function _flux_array_threaded!(all_yy::AbstractArray{T,3}, fluxensemble::TGLFNNe
     nouts, nsamples, nmodels = size(all_yy)
     Threads.@threads for k in 1:nmodels
         @with_pool thread_pool begin
-            each_y = acquire!(thread_pool, T, nouts, nsamples)
+            each_y = T === Float64 ? acquire!(thread_pool, T, nouts, nsamples) : Matrix{T}(undef, nouts, nsamples)
             flux_array!(each_y, fluxensemble.models[k], x; warn_nn_train_bounds=(warn_nn_train_bounds && k == 1), fidelity)
             all_yy[:, :, k] = each_y
         end
@@ -446,7 +448,7 @@ function _flux_array_threaded!(all_yy::AbstractMatrix{T}, fluxensemble::TGLFNNen
     nouts, nmodels = size(all_yy)
     Threads.@threads for k in 1:nmodels
         @with_pool thread_pool begin
-            each_y = acquire!(thread_pool, T, nouts)
+            each_y = T === Float64 ? acquire!(thread_pool, T, nouts) : Vector{T}(undef, nouts)
             flux_array!(each_y, fluxensemble.models[k], x; warn_nn_train_bounds=(warn_nn_train_bounds && k == 1), fidelity)
             all_yy[:, k] = each_y
         end
@@ -467,7 +469,7 @@ Ensemble batched inference: runs all models in parallel, returns mean (Â± std if
     nsamples = size(x, 2)
 
     # Store each model's output: (nouts, nsamples, nmodels) for efficient slice access
-    all_yy = acquire!(pool, T, nouts, nsamples, nmodels)
+    all_yy = T === Float64 ? acquire!(pool, T, nouts, nsamples, nmodels) : Array{T,3}(undef, nouts, nsamples, nmodels)
     if Threads.nthreads() == 1
         _flux_array_sequential!(all_yy, fluxensemble, x; warn_nn_train_bounds, fidelity)
     else
@@ -511,7 +513,7 @@ Ensemble single-sample inference: runs all models on one vector, returns mean (Â
     end
 
     # Store each model's output: (nouts, nmodels) for efficient slice access
-    all_yy = acquire!(pool, T, nouts, nmodels)
+    all_yy = T === Float64 ? acquire!(pool, T, nouts, nmodels) : Matrix{T}(undef, nouts, nmodels)
     if Threads.nthreads() == 1
         _flux_array_sequential!(all_yy, fluxensemble, x; warn_nn_train_bounds, fidelity)
     else
@@ -614,7 +616,7 @@ Returns a vector of `flux_solution` structures
         tglfmod = loadmodelonce(model_filename)
     end
 
-    inputs = acquire_view!(pool, T, length(tglfmod.xnames), length(input_tglfs))
+    inputs = T === Float64 ? acquire_view!(pool, T, length(tglfmod.xnames), length(input_tglfs)) : Matrix{T}(undef, length(tglfmod.xnames), length(input_tglfs))
 
     # Extract input fields using @generated function for zero-allocation
     xnames_val = _get_xnames_without_log10_suffix(tglfmod)
@@ -658,7 +660,7 @@ Returns a vector of `flux_solution` structures
         end
 
         if model_filename == "sat3_em_d3d_azf-1"
-            gk_inputs = acquire_view!(pool, T, size(inputs, 1) + 1, size(inputs, 2))
+            gk_inputs = T === Float64 ? acquire_view!(pool, T, size(inputs, 1) + 1, size(inputs, 2)) : Matrix{T}(undef, size(inputs, 1) + 1, size(inputs, 2))
             gk_inputs[1:end-1, :] = inputs
 
             for (i, postfix) in enumerate(("_gknng24", "_gknnp24", "_gknne24", "_gknni24"))
@@ -668,7 +670,7 @@ Returns a vector of `flux_solution` structures
                 tmp[i, :] .*= err
             end
         elseif model_filename == "sat3_em_d3d_azf-1_withnegD"
-            gk_inputs = acquire_view!(pool, T, size(inputs, 1) + 4, size(inputs, 2))
+            gk_inputs = T === Float64 ? acquire_view!(pool, T, size(inputs, 1) + 4, size(inputs, 2)) : Matrix{T}(undef, size(inputs, 1) + 4, size(inputs, 2))
             gk_inputs[1:end-4, :] = inputs
             if k_rminloc === nothing
                 @warn "RMIN_LOC not found in xnames for GKNN edge blending"
@@ -706,7 +708,7 @@ Returns a vector of `flux_solution` structures
                 end
             end
         elseif model_filename in ("sat3_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d_azf-1_gkdb", "sat2_em_d3d+mastu+nstx_azf-1")
-            gk_inputs = acquire_view!(pool, T, size(inputs, 1) + 4, size(inputs, 2))
+            gk_inputs = T === Float64 ? acquire_view!(pool, T, size(inputs, 1) + 4, size(inputs, 2)) : Matrix{T}(undef, size(inputs, 1) + 4, size(inputs, 2))
             gk_inputs[1:end-4, :] = inputs
             gk_inputs[end-3:end, :] = tmp
 
@@ -720,7 +722,7 @@ Returns a vector of `flux_solution` structures
                 tmp .*= gkdb_err
             end
         elseif model_filename == "sat3_em_d3d+mastu_azf-1"
-            gk_inputs = acquire_view!(pool, T, size(inputs, 1) + 4, size(inputs, 2))
+            gk_inputs = T === Float64 ? acquire_view!(pool, T, size(inputs, 1) + 4, size(inputs, 2)) : Matrix{T}(undef, size(inputs, 1) + 4, size(inputs, 2))
             gk_inputs[1:end-4, :] = inputs
             gk_inputs[end-3:end, :] = tmp
 
