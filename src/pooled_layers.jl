@@ -48,6 +48,9 @@ struct PooledActivation{F}
     σ::F
 end
 
+# Fallback callable (no pool) — enables use inside plain Flux.Chain for non-Float64 types
+@inline (pa::PooledActivation)(x) = pa.σ.(x)
+
 #= ====================================== =#
 #  PooledDense
 #= ====================================== =#
@@ -63,6 +66,9 @@ Requires `@with_pool` block at the outermost call site.
 struct PooledDense{D<:Flux.Dense}
     dense::D
 end
+
+# Fallback callable (no pool) — enables use inside plain Flux.Chain for non-Float64 types
+@inline (pd::PooledDense)(x) = pd.dense(x)
 
 #= ====================================== =#
 #  PooledParallelAdd (ResNet skip connection)
@@ -266,9 +272,9 @@ end
 
 # Allocating versions (return owned Array via collect)
 # Uses _forward_with_pool to avoid repeated get_task_local_pool() calls
-# For non-Float64 eltype (e.g., ForwardDiff.Dual), bypass pool and use plain Flux.Chain
+# For non-AbstractFloat eltype (e.g., ForwardDiff.Dual), bypass pool and use plain Flux.Chain
 function (pm::PooledChain)(x::AbstractMatrix)
-    if eltype(x) !== Float64
+    if !(eltype(x) <: AbstractFloat)
         return pm.model(x)
     end
     pool = get_task_local_pool()
@@ -279,7 +285,7 @@ function (pm::PooledChain)(x::AbstractMatrix)
 end
 
 function (pm::PooledChain)(x::AbstractVector)
-    if eltype(x) !== Float64
+    if !(eltype(x) <: AbstractFloat)
         return pm.model(x)
     end
     pool = get_task_local_pool()
@@ -292,7 +298,7 @@ end
 # In-place versions: pm(output, input) following Julia convention (mutated arg first)
 # Uses _forward_with_pool to avoid repeated get_task_local_pool() calls
 function (pm::PooledChain)(out::AbstractMatrix, x::AbstractMatrix)
-    if eltype(x) !== Float64
+    if !(eltype(x) <: AbstractFloat)
         copyto!(out, pm.model(x))
         return out
     end
@@ -304,7 +310,7 @@ function (pm::PooledChain)(out::AbstractMatrix, x::AbstractMatrix)
 end
 
 function (pm::PooledChain)(out::AbstractVector, x::AbstractVector)
-    if eltype(x) !== Float64
+    if !(eltype(x) <: AbstractFloat)
         copyto!(out, pm.model(x))
         return out
     end
