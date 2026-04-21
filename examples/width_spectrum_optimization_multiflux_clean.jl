@@ -1,9 +1,10 @@
 # ============================================================================
 # WIDTH_SPECTRUM Optimization with 4-Component QL Weights Cost Function
-# VERSION: 2024-10-31-v3-asinh-direct
+# VERSION: 2025-11-26-v4-normalized
 #
 # Per-ky optimization using raw QL_weights (not flux_out with intensities)
-# asinh applied directly to values: loss = (asinh(TJLF) - asinh(CGYRO))^2
+# Proper normalization: loss = asinh((TJLF - CGYRO) / STD)^2
+# Auto-computes normalization constants from dataset at startup
 #
 # IMPORTANT: If you edit @everywhere functions, restart Julia to reload workers
 # ============================================================================
@@ -43,8 +44,8 @@ println("Main process ready!\n")
 if nworkers() > 0
     println("Loading packages on $(nworkers()) workers...")
     @everywhere begin
-        using Pkg
-        Pkg.activate("/global/homes/t/trifolio/.julia/dev/TurbulentTransport")
+        # Note: Project environment already activated via exeflags in addprocs()
+        # No need to call Pkg.activate() here - it causes pidfile race conditions
         using TurbulentTransport, JSON, Plots, LaTeXStrings, TJLF
         using Interpolations, Optim, BlackBoxOptim, Statistics, DelimitedFiles
     end
@@ -58,6 +59,58 @@ end
 
 # Load data
 @everywhere data = JSON.parsefile("qlnn_training_subset_merged_result_dict_dmn36p5_dict.json")
+# @everywhere data = JSON.parsefile("qlnn_training_subset_merged_result_dict_dmn40p2_dict_test_500.json")
+
+# ============================================================================
+# COMPUTE NORMALIZATION STATISTICS FROM DATASET
+# ============================================================================
+println("Computing normalization statistics from dataset...")
+all_gamma = Float64[]
+all_gamma_electron = Float64[]
+all_q_electron = Float64[]
+all_q_ions = Float64[]
+
+n_shots = length(data["id"])
+for shot in 1:n_shots
+    # Get CGYRO gamma
+    cgyro_gamma = Float64.(data["cgyro_growthrate_spectra"][shot][2])
+    append!(all_gamma, cgyro_gamma)
+
+    # Get CGYRO fluxes
+    cgyro_fluxes = data["cgyro_ql_fluxes"][shot]
+    n_ky = length(cgyro_fluxes)
+
+    for ky_idx in 1:n_ky
+        # Extract QL weights: species [0=D, 1=C, 2=e], field [0,1,2], type [0=particle, 1=energy]
+        gamma_e = sum(cgyro_fluxes[ky_idx][3][field+1][1] for field in 0:2)
+        q_e = sum(cgyro_fluxes[ky_idx][3][field+1][2] for field in 0:2)
+        q_ions = sum(cgyro_fluxes[ky_idx][species+1][field+1][2]
+                     for species in 0:1, field in 0:2)
+
+        push!(all_gamma_electron, gamma_e)
+        push!(all_q_electron, q_e)
+        push!(all_q_ions, q_ions)
+    end
+end
+
+GAMMA_STD = std(all_gamma)
+GAMMA_ELECTRON_STD = std(all_gamma_electron)
+Q_ELECTRON_STD = std(all_q_electron)
+Q_IONS_STD = std(all_q_ions)
+
+println("Normalization constants (std):")
+println("  GAMMA_STD = $(round(GAMMA_STD, digits=6))")
+println("  GAMMA_ELECTRON_STD = $(round(GAMMA_ELECTRON_STD, digits=6))")
+println("  Q_ELECTRON_STD = $(round(Q_ELECTRON_STD, digits=6))")
+println("  Q_IONS_STD = $(round(Q_IONS_STD, digits=6))")
+println()
+
+# Share with workers (use global vars, not const, to avoid redeclaration errors)
+@everywhere GAMMA_STD = $GAMMA_STD
+@everywhere GAMMA_ELECTRON_STD = $GAMMA_ELECTRON_STD
+@everywhere Q_ELECTRON_STD = $Q_ELECTRON_STD
+@everywhere Q_IONS_STD = $Q_IONS_STD
+# ============================================================================
 
 # Template input.tglf file
 @everywhere input_tglf_lines = """
@@ -156,6 +209,13 @@ ZMAJ_LOC = -0.0576768
 ZS_1 = -1.0
 ZS_2 = 1.0
 ZS_3 = 6.0
+C_B = 0.315
+SIG_B = 0.34
+BOUNCE_COEFF = 3.0
+C_NORM = 1.82770384
+C_EXP = 1.39786897
+C_COEFF = 0.36017009
+C_ETG = 1.25
 """;
 
 @everywhere function setup_input_file(shot::Int, filepath::String)
@@ -237,9 +297,9 @@ end
     cgyro_q_ions_target::Float64,
     baseline_width::Float64,
     lambda::Float64=0.01;
-    _version::Int=7
+    _version::Int=8
 )
-    """Optimize WIDTH using configurable gamma/QL weight split, loss = (asinh(TJLF) - asinh(CGYRO))^2"""
+    """Optimize WIDTH using configurable gamma/QL weight split with proper normalization"""
 
     n_ky_total = length(ky_grid)
     best_width = Ref(baseline_width)
@@ -264,11 +324,19 @@ end
             q_electron_ky = sum(QL_weights[:, 1, 1, ky_index, 2])
             q_ions_ky = sum(QL_weights[:, 2:3, 1, ky_index, 2])
 
-            # Calculate errors with asinh transformation applied to values
-            gamma_error = asinh(gamma_this_ky) - asinh(cgyro_gamma_target)
-            gamma_electron_error = asinh(gamma_electron_ky) - asinh(cgyro_gamma_electron_target)
-            q_electron_error = asinh(q_electron_ky) - asinh(cgyro_q_electron_target)
-            q_ions_error = asinh(q_ions_ky) - asinh(cgyro_q_ions_target)
+            # Calculate normalized errors: asinh(diff / STD)
+            # This ensures all components contribute equally regardless of scale
+            gamma_diff = gamma_this_ky - cgyro_gamma_target
+            gamma_error = asinh(gamma_diff / max(GAMMA_STD, 1e-10))
+
+            gamma_electron_diff = gamma_electron_ky - cgyro_gamma_electron_target
+            gamma_electron_error = asinh(gamma_electron_diff / max(GAMMA_ELECTRON_STD, 1e-10))
+
+            q_electron_diff = q_electron_ky - cgyro_q_electron_target
+            q_electron_error = asinh(q_electron_diff / max(Q_ELECTRON_STD, 1e-10))
+
+            q_ions_diff = q_ions_ky - cgyro_q_ions_target
+            q_ions_error = asinh(q_ions_diff / max(Q_IONS_STD, 1e-10))
 
             # 4-component loss using configurable weights:
             component_loss = GAMMA_WEIGHT * gamma_error^2 +
@@ -460,16 +528,21 @@ end
 
     baseline_loss = 0.0
     for (i, idx) in enumerate(opt_indices)
-        gamma_error = asinh(gamma_baseline[idx]) - asinh(cgyro_gamma_interp[i])
+        # Use same normalization as optimization
+        gamma_diff = gamma_baseline[idx] - cgyro_gamma_interp[i]
+        gamma_error = asinh(gamma_diff / max(GAMMA_STD, 1e-10))
 
         gamma_electron_baseline = sum(QL_weights_baseline[:, 1, 1, idx, 1])
-        gamma_electron_error = asinh(gamma_electron_baseline) - asinh(cgyro_gamma_electron_interp[i])
+        gamma_electron_diff = gamma_electron_baseline - cgyro_gamma_electron_interp[i]
+        gamma_electron_error = asinh(gamma_electron_diff / max(GAMMA_ELECTRON_STD, 1e-10))
 
         q_electron_baseline = sum(QL_weights_baseline[:, 1, 1, idx, 2])
-        q_electron_error = asinh(q_electron_baseline) - asinh(cgyro_q_electron_interp[i])
+        q_electron_diff = q_electron_baseline - cgyro_q_electron_interp[i]
+        q_electron_error = asinh(q_electron_diff / max(Q_ELECTRON_STD, 1e-10))
 
         q_ions_baseline = sum(QL_weights_baseline[:, 2:3, 1, idx, 2])
-        q_ions_error = asinh(q_ions_baseline) - asinh(cgyro_q_ions_interp[i])
+        q_ions_diff = q_ions_baseline - cgyro_q_ions_interp[i]
+        q_ions_error = asinh(q_ions_diff / max(Q_IONS_STD, 1e-10))
 
         baseline_loss += GAMMA_WEIGHT * gamma_error^2 +
                         QL_COMPONENT_WEIGHT * (gamma_electron_error^2 + q_electron_error^2 + q_ions_error^2)
@@ -860,7 +933,7 @@ function main_parallel(
     results_dict = Dict(shot => results[i] for (i, shot) in enumerate(shots))
 
     # Save results
-    output_dir = "width_spec_opt_multiflux"
+    output_dir = "width_spec_opt_multiflux_n95"
     println("\nSaving results...")
     save_combined_results(results_dict, output_dir)
 
@@ -907,8 +980,9 @@ ql_pct = round(QL_WEIGHT * 100, digits=1)
 ql_component_pct = round(QL_COMPONENT_WEIGHT * 100, digits=2)
 
 println("Functions loaded successfully!")
-println("Workers: $(nworkers()) | Version: 2024-10-31-v3-asinh-direct")
+println("Workers: $(nworkers()) | Version: 2024-11-26-v4-normalized")
 println("Cost: $(gamma_pct)% gamma + $(ql_pct)% QL weights ($(ql_component_pct)% each: Γ_e, Q_e, Q_ions)")
+println("Normalization: asinh((TJLF - CGYRO) / STD) - dataset-specific")
 println("=" ^ 60)
 
 # ============================================================================
