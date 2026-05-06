@@ -301,6 +301,9 @@ end
 # inputs work too: `Dual <: Real` defines `<` against Float32 by reading the
 # value field. The warning's printed value is whatever `xs_all[i, jext]` is —
 # `Float64` or a `Dual` — same convention as `flux_array!` in `tglf_nn.jl`.
+_qlnn_check_xs_bounds(xs_all::AbstractMatrix, ens::QLNNensemble) =
+    _qlnn_check_xs_bounds(xs_all, ens.models[1])
+
 function _qlnn_check_xs_bounds(xs_all::AbstractMatrix, model::QLNNmodel)
     xbounds = model.xbounds
     xnames = model.xnames
