@@ -19,6 +19,8 @@ include("pooled_layers.jl")
 
 include("tglf_nn.jl")
 
+include("qlnn.jl")
+
 include("finn.jl")
 
 include("modeID.jl")
@@ -29,7 +31,8 @@ include("qlgyro.jl")
 
 include("utils.jl")
 
-export InputTGLF, InputTJLF, available_models, model_selector
+export InputTGLF, InputTJLF, available_models, available_qlnn_bundles, model_selector
+export run_qlnn, loadqlnnbundle, loadqlnnmodel, QLNNmodel, QLNNensemble, QLNNbundle
 
 const document = Dict()
 document[Symbol(@__MODULE__)] = [name for name in Base.names(@__MODULE__; all=false, imported=false) if name != Symbol(@__MODULE__)]
