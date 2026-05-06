@@ -224,7 +224,304 @@ end
 export TurbulenceMode, ITG, TEM, KBM, ETG, MTM
 export AbstractModeIdentification, TJLFModeIdentification, identify_modes
 export MODE_COLORS, MODE_LABELS
+# ========== Fluctuation spectra reconstruction ==========
 
+"""
+    TJLFFluctuationSpectra{T<:Real}
+
+2D fluctuation spectrum reconstruction from a TJLF SAT saturation run.
+
+The potential spectrum is reconstructed from the Staebler spectral-shift Lorentzian
+kx distribution ([Staebler et al. PoP 2016, NF 2017, NF 2021]):
+
+```
+|φ|²(kx, ky, m) = phinorm(ky, m) · L(u(kx)) / L(u(0))
+        L(u)  = 1 / [ (1 + ay · u²)² · (1 + |ax · u|^exp_ax)² ]
+        u(kx) = (kx - kx0_e(ky)) · ky / kx_width(ky)
+```
+
+Normalization convention: `phi2[kx=0, ky, m] == phinorm(ky, m)` matches the TGLF
+`phinorm` (the field intensity at lab-frame `kx = 0`). The Lorentzian peaks at
+`kx = kx0_e`, where `|φ|² = phinorm / L(u(0))`.
+
+Density fluctuation spectra for species `s` are given by
+`|δnₛ|²(kx, ky, m) = N_weight[s, m, ky] · |φ|²(kx, ky, m)`, populated only when
+species-resolved density QL weights are supplied.
+
+# Fields
+- `kx::Vector{T}`          — kx grid (ρ_s units)
+- `ky::Vector{T}`          — ky grid (ρ_s units; copy of `input_tjlf.KY_SPECTRUM`)
+- `phi2::Array{T,3}`       — `|φ|²(kx, ky, mode)`, shape `(nkx, nky, nmodes)`
+- `phi2_ky::Matrix{T}`     — peak intensity `phinorm(ky, mode)`, shape `(nky, nmodes)`
+- `kx_width::Vector{T}`    — SAT kx-Lorentzian width per ky, shape `(nky,)`
+- `kx0_e::Vector{T}`       — spectral shift per ky, shape `(nky,)`
+- `ax::T`, `ay::T`, `exp_ax::Int` — SAT Lorentzian coefficients
+- `sat_rule::Int`          — SAT rule used
+- `density2::Union{Nothing, Array{T,4}}` — `|δnₛ|²(kx, ky, mode, species)`,
+   shape `(nkx, nky, nmodes, ns)`, or `nothing` if density weights were not supplied.
+"""
+struct TJLFFluctuationSpectra{T<:Real}
+    kx::Vector{T}
+    ky::Vector{T}
+    phi2::Array{T,3}
+    phi2_ky::Matrix{T}
+    kx_width::Vector{T}
+    kx0_e::Vector{T}
+    ax::T
+    ay::T
+    exp_ax::Int
+    sat_rule::Int
+    density2::Union{Nothing,Array{T,4}}
+end
+
+function Base.show(io::IO, ::MIME"text/plain", fs::TJLFFluctuationSpectra{T}) where {T}
+    nkx, nky, nmodes = size(fs.phi2)
+    println(io, "TJLFFluctuationSpectra{$T}:")
+    println(io, "  SAT_RULE=$(fs.sat_rule), ax=$(fs.ax), ay=$(fs.ay), exp_ax=$(fs.exp_ax)")
+    println(io, "  kx: $nkx points in [$(round(minimum(fs.kx); sigdigits=3)), $(round(maximum(fs.kx); sigdigits=3))]")
+    println(io, "  ky: $nky points in [$(round(minimum(fs.ky); sigdigits=3)), $(round(maximum(fs.ky); sigdigits=3))]")
+    println(io, "  nmodes=$nmodes")
+    println(io, "  phi2: Array{$T,3} of size $(size(fs.phi2))")
+    if fs.density2 === nothing
+        println(io, "  density2: (not computed — pass `density_weights` to include)")
+    else
+        println(io, "  density2: Array{$T,4} of size $(size(fs.density2)) (nkx, nky, nmodes, nspecies)")
+    end
+end
+
+@inline function _sat_lorentz_shape(u, ax, ay, exp_ax)
+    ay_term = (1 + ay * u^2)
+    ax_term = (1 + abs(ax * u)^exp_ax)
+    return 1 / (ay_term^2 * ax_term^2)
+end
+
+"""
+    fluctuation_spectra(tjlf_result::NamedTuple, input_tjlf::InputTJLF; kw...) -> TJLFFluctuationSpectra
+    fluctuation_spectra(input_tjlf::InputTJLF; kw...)
+    fluctuation_spectra(input_tglf::InputTGLF; kw...)
+
+Reconstruct the 2D `(kx, ky, mode)` potential fluctuation spectrum `|φ|²` from a
+TJLF saturation run using the Staebler SAT1/SAT2 Lorentzian kx distribution.
+
+Only the potential spectrum is computable from standard `TJLF.run` outputs. To
+additionally obtain per-species density fluctuation spectra, pass the density
+QL weights via `density_weights` (shape `(nspecies, nmodes, nky)`), as produced
+internally by TJLF's `get_QL_weights` (field `N_weight`).
+
+# Arguments
+- `tjlf_result`: output of `TJLF.run(input_tjlf)` (NamedTuple with `QL_weights`, `eigenvalue`, ...)
+- `input_tjlf`: the `InputTJLF` used for that run (its `KY_SPECTRUM` must be populated)
+
+# Keywords
+- `kx::Union{Nothing, AbstractVector}=nothing` — custom kx grid (ρ_s units). If `nothing`, an auto-sized symmetric grid is generated covering `±kx_max_sigma` Lorentzian half-widths around the largest `|kx0_e|`.
+- `n_kx::Int=128` — number of kx points when auto-sizing
+- `kx_max_sigma::Real=6.0` — kx half-range in Lorentzian half-widths when auto-sizing
+- `density_weights::Union{Nothing, AbstractArray}=nothing` — density QL weights `N_weight[species, mode, ky]`. If supplied, `|δnₛ|²` is stored in `density2`.
+
+# Notes
+- Requires `SAT_RULE ∈ (1, 2, 3)` and `ALPHA_QUENCH == 0.0` (spectral-shift model active). Under the quench rule (`ALPHA_QUENCH != 0`) TGLF sets `ax = ay = 0` so no Lorentzian kx shape is defined.
+- `phi2_ky[j, m]` is the TJLF `phinorm` at `(ky[j], mode m)`, which equals `|φ|²` at lab-frame `kx = 0`. The spectrum peaks at `kx = kx0_e(ky[j])` with value `phi2_ky[j, m] / L(-kx0_e·ky/kx_width)`.
+- Integrate `phi2` numerically in kx if a kx-integrated intensity is needed — the prefactor `L(u(0))⁻¹ · (π/(2√ay)) · (kx_width/ky)` is not absorbed into `phi2`.
+"""
+function fluctuation_spectra(
+    tjlf_result::NamedTuple,
+    input_tjlf::InputTJLF{T};
+    kx::Union{Nothing,AbstractVector}=nothing,
+    n_kx::Int=128,
+    kx_max_sigma::Real=6.0,
+    density_weights::Union{Nothing,AbstractArray}=nothing
+) where {T<:Real}
+    sat_rule = input_tjlf.SAT_RULE
+    @assert sat_rule in (1, 2, 3) "fluctuation_spectra requires SAT_RULE ∈ {1,2,3} (got $sat_rule)"
+    @assert input_tjlf.ALPHA_QUENCH == 0.0 "fluctuation_spectra requires ALPHA_QUENCH=0 (spectral-shift model)"
+    @assert !isempty(input_tjlf.KY_SPECTRUM) && !any(isnan, input_tjlf.KY_SPECTRUM) "input_tjlf.KY_SPECTRUM must be populated (run TJLF first)"
+
+    QL_weights = tjlf_result.QL_weights
+    gamma_matrix = tjlf_result.eigenvalue[:, :, 1]  # (nmodes, nky)
+
+    satParams = TJLF.get_sat_params(input_tjlf)
+
+    # SAT2/SAT3 need zonal-mixing params from the first-pass gammas
+    zonal_kwargs = if sat_rule in (2, 3)
+        most_unstable_gamma_fp = gamma_matrix[1, :]
+        vzf, kymax, jmax = TJLF.get_zonal_mixing(input_tjlf, satParams, most_unstable_gamma_fp)
+        (; vzf_out_param=vzf, kymax_out_param=kymax, jmax_out_param=jmax)
+    else
+        NamedTuple()
+    end
+
+    params = TJLF.intensity_sat(
+        input_tjlf, satParams, gamma_matrix, QL_weights, T(2.0), true;
+        zonal_kwargs...
+    )
+
+    phinorm::Matrix{T} = params.phinorm
+    kx_width::Vector{T} = params.kx_width
+    kx0_e::Vector{T} = params.kx0_e
+    ax::T = T(params.ax)
+    ay::T = T(params.ay)
+    exp_ax::Int = Int(params.exp_ax)
+
+    ky = collect(T, input_tjlf.KY_SPECTRUM)
+    nky = length(ky)
+    nmodes = size(phinorm, 2)
+
+    kx_vec::Vector{T} = if kx === nothing
+        lorentz_hw = ay > 0 ? kx_width ./ (ky .* sqrt(ay)) : kx_width ./ ky
+        kx_half = maximum(lorentz_hw) * T(kx_max_sigma) + maximum(abs.(kx0_e))
+        collect(T, range(-kx_half, kx_half; length=n_kx))
+    else
+        collect(T, kx)
+    end
+    nkx = length(kx_vec)
+
+    phi2 = zeros(T, nkx, nky, nmodes)
+    @inbounds for j in 1:nky
+        inv_w = ky[j] / kx_width[j]
+        u0 = -kx0_e[j] * inv_w
+        L0 = _sat_lorentz_shape(u0, ax, ay, exp_ax)
+        invL0 = L0 > 0 ? one(T) / L0 : one(T)
+        for m in 1:nmodes
+            pn = phinorm[j, m]
+            pn == 0 && continue
+            for i in 1:nkx
+                u = (kx_vec[i] - kx0_e[j]) * inv_w
+                phi2[i, j, m] = pn * _sat_lorentz_shape(u, ax, ay, exp_ax) * invL0
+            end
+        end
+    end
+
+    density2 = _density_spectrum_from_weights(density_weights, phi2, nmodes, nky, T)
+
+    return TJLFFluctuationSpectra{T}(
+        kx_vec, ky, phi2, copy(phinorm), kx_width, kx0_e, ax, ay, exp_ax, sat_rule, density2
+    )
+end
+
+function fluctuation_spectra(input_tjlf::InputTJLF{T}; kw...) where {T<:Real}
+    tjlf_result = TJLF.run(input_tjlf)
+    return fluctuation_spectra(tjlf_result, input_tjlf; kw...)
+end
+
+function fluctuation_spectra(input_tglf::InputTGLF; kw...)
+    input_tjlf = InputTJLF{Float64}(input_tglf)
+    return fluctuation_spectra(input_tjlf; kw...)
+end
+
+function _density_spectrum_from_weights(::Nothing, ::Array, ::Int, ::Int, ::Type)
+    return nothing
+end
+
+function _density_spectrum_from_weights(dw::AbstractArray, phi2::Array{T,3}, nmodes::Int, nky::Int, ::Type{T}) where {T<:Real}
+    @assert ndims(dw) == 3 "density_weights must be a 3D array with shape (nspecies, nmodes, nky)"
+    ns = size(dw, 1)
+    @assert size(dw, 2) == nmodes "density_weights size(2)=$(size(dw,2)) must equal nmodes=$nmodes"
+    @assert size(dw, 3) == nky    "density_weights size(3)=$(size(dw,3)) must equal nky=$nky"
+    nkx = size(phi2, 1)
+    d2 = Array{T,4}(undef, nkx, nky, nmodes, ns)
+    @inbounds for s in 1:ns, m in 1:nmodes, j in 1:nky
+        w = T(dw[s, m, j])
+        for i in 1:nkx
+            d2[i, j, m, s] = w * phi2[i, j, m]
+        end
+    end
+    return d2
+end
+
+"""
+    radial_correlation_length(fs; method=:hwhm, pad=4) -> (Lr, L_avg)
+
+Radial correlation length (ρ_s units) derived from the kx power spectrum in
+`fs::TJLFFluctuationSpectra`.
+
+At each `ky[j]`, the 2-point radial autocorrelation is the inverse Fourier
+transform of the (modes-summed) kx power:
+
+    C(Δr; ky) = ∫ |φ̂|²(kx, ky) e^{i kx Δr} dkx  /  ∫ |φ̂|²(kx, ky) dkx .
+
+The carrier from the spectral shift `kx0_e(ky)` is stripped by taking the
+magnitude `|C|`; the envelope's width defines `Lr[j]`.
+
+# Arguments
+- `fs`: spectrum returned by `fluctuation_spectra`.
+
+# Keywords
+- `method = :hwhm` : half-width at half-maximum (Δr where |C| drops to 0.5).
+  Alternatives: `:efold` (1/e point), `:integral` (∫|C|dΔr / |C(0)|).
+- `n_dr = 512`     : number of Δr samples for the direct DFT.
+- `dr_max`         : extent of the Δr grid (default 8× the longest radial
+  wavelength supported by `fs.kx`).
+- `modes = nothing`: optional mode slice; default sums over all modes.
+
+# Returns
+A `NamedTuple` with
+- `Lr::Vector{T}` — `Lr[j]` in ρ_s units, for each `fs.ky[j]`.
+- `L_avg::T`     — intensity-weighted mean, weight = `sum(phi2_ky; dims=mode)`.
+
+Both are in ρ_s units; multiply by `ρ_s/a` (from `GACODE.rho_s` and
+`eqt.boundary.minor_radius`) for units of the minor radius.
+"""
+function radial_correlation_length(fs::TJLFFluctuationSpectra{T};
+    method::Symbol = :hwhm,
+    n_dr::Int = 512,
+    dr_max::Union{Nothing,Real} = nothing,
+    modes::Union{Nothing,AbstractVector{<:Integer}} = nothing,
+) where {T<:Real}
+    kx = fs.kx
+    ky = fs.ky
+    length(kx) >= 4 || throw(ArgumentError("need ≥4 kx points"))
+    Δkx = kx[2] - kx[1]
+    @assert maximum(abs, Base.diff(kx) .- Δkx) < 1e-6 * Δkx "fs.kx must be uniformly spaced"
+
+    # Δr grid: default span = 8× the longest supported wavelength of the kx grid.
+    Δr_max = T(dr_max === nothing ? 8 * (2π / (Δkx * length(kx))) : dr_max)
+    Δr_max <= 0 && throw(ArgumentError("dr_max must be > 0"))
+    Δr_grid = collect(range(zero(T), Δr_max; length=n_dr))
+
+    # modes-summed kx power at each ky
+    P = if modes === nothing
+        dropdims(sum(fs.phi2; dims=3); dims=3)    # (nkx, nky)
+    else
+        dropdims(sum(view(fs.phi2, :, :, modes); dims=3); dims=3)
+    end
+
+    Lr = similar(ky, T)
+    # Precompute kx-by-Δr table of cos/sin to vectorise the direct DFT:
+    #   C(Δr; ky) = Σ_kx P(kx, ky) e^{i kx Δr} Δkx
+    #   |C|       = √((Σ P cos)² + (Σ P sin)²)
+    cosK = cos.(kx .* Δr_grid')       # (nkx, n_dr)
+    sinK = sin.(kx .* Δr_grid')
+
+    for j in eachindex(ky)
+        Pj  = @view P[:, j]
+        C_re = vec(Pj' * cosK)
+        C_im = vec(Pj' * sinK)
+        Cmag = @. sqrt(C_re^2 + C_im^2)
+        C0   = Cmag[1]
+        if C0 == 0
+            Lr[j] = zero(T)
+            continue
+        end
+        Lr[j] = if method === :integral
+            T(sum((Cmag[2:end] .+ Cmag[1:end-1]) .* (Δr_grid[2] / 2)) / C0)
+        else
+            target = method === :efold ? C0 / ℯ : T(0.5) * C0
+            idx = findfirst(<(target), Cmag)
+            idx === nothing ? Δr_grid[end] : Δr_grid[idx]
+        end
+    end
+
+    # intensity-weighted average over ky (phi2_ky is phinorm per (ky, mode))
+    w = if modes === nothing
+        vec(sum(fs.phi2_ky; dims=2))
+    else
+        vec(sum(view(fs.phi2_ky, :, modes); dims=2))
+    end
+    L_avg = sum(Lr .* w) / max(sum(w), eps(T))
+    return (Lr = Lr, L_avg = L_avg)
+end
+
+export TJLFFluctuationSpectra, fluctuation_spectra, radial_correlation_length
 # ========== Original run_tjlf functions ==========
 
 function run_tjlf(input_tjlf::InputTJLF{T}) where {T<:Real}
