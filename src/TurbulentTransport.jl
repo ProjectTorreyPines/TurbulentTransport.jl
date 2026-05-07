@@ -37,4 +37,12 @@ export run_qlnn, loadqlnnbundle, loadqlnnmodel, QLNNmodel, QLNNensemble, QLNNbun
 const document = Dict()
 document[Symbol(@__MODULE__)] = [name for name in Base.names(@__MODULE__; all=false, imported=false) if name != Symbol(@__MODULE__)]
 
+# Runtime initialization. Anything that depends on `Threads.nthreads()` must
+# happen here, not at top-level / precompile time, since precompilation runs
+# single-threaded and would otherwise bake in a 1-thread fallback.
+function __init__()
+    init_qlnn_thread_pools!()
+    return nothing
+end
+
 end # module
