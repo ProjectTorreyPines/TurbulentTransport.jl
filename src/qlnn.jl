@@ -443,6 +443,141 @@ end
 # "ensembles") falls through to the sequential path.
 _qlnn_should_thread(nmodels::Int) = nmodels > 1 && Threads.nthreads() > 1
 
+# ---------------------------------------------------------------------------
+#  Thread-indexed pool array for zero-alloc threaded ensemble inference
+# ---------------------------------------------------------------------------
+# One AdaptiveArrayPool per Julia thread, populated at runtime via
+# `_qlnn_ensure_thread_pools_capacity!`. The threaded ensemble path uses
+# `_qlnn_get_thread_pool()` (which routes via `Threads.threadid()`) instead
+# of `get_task_local_pool()`, so pool buffers survive across
+# `Threads.@threads` calls (task-local pools are lost when tasks end, causing
+# cold-start allocations on every `run_qlnn` call).
+#
+# Why runtime, not precompile-time: a module-load `[AdaptiveArrayPool() for
+# _ in 1:Threads.nthreads()]` evaluates `Threads.nthreads()` *during
+# precompilation*, which is single-threaded — so the cached `.ji` ships a
+# 1-element vector and indexing it from any other thread raises
+# `BoundsError`. We initialize lazily instead, with a one-time resize during
+# `TurbulentTransport.__init__()` (see `TurbulentTransport.jl`) plus a
+# locked grow-on-demand fallback in case `Threads.threadid()` exceeds the
+# count seen at init (interactive threadpools, dynamic spawn, ...).
+#
+# Safety: each OS thread holds exactly one entry and runs at most one task
+# at a time (Julia's `:static` @threads scheduler). Not safe for nested
+# @threads or @async on the same thread — acceptable given TurbulentTransport's
+# usage patterns.
+const _QLNN_THREAD_POOLS = AdaptiveArrayPool[]
+const _QLNN_THREAD_POOLS_LOCK = ReentrantLock()
+
+# One-shot capacity bump used by both __init__ and the lazy fallback.
+function _qlnn_ensure_thread_pools_capacity!(n::Int)
+    Base.@lock _QLNN_THREAD_POOLS_LOCK begin
+        while length(_QLNN_THREAD_POOLS) < n
+            push!(_QLNN_THREAD_POOLS, AdaptiveArrayPool())
+        end
+    end
+    return _QLNN_THREAD_POOLS
+end
+
+# Public init hook: called from `TurbulentTransport.__init__()` so pools are
+# pre-allocated for the runtime thread count. Idempotent — safe to call from
+# tests / repl after a Threads.nthreads() bump.
+#
+# We size to `Threads.maxthreadid()`, not `Threads.nthreads()`: on Julia 1.9+
+# `Threads.threadid()` can return any id in 1:maxthreadid() because of the
+# interactive / foreign threadpools, but `Threads.nthreads()` only counts the
+# default pool. Indexing thread-keyed buffers with the latter would BoundsError
+# on tasks scheduled into the interactive pool.
+function init_qlnn_thread_pools!()
+    return _qlnn_ensure_thread_pools_capacity!(Threads.maxthreadid())
+end
+
+# Hot-path getter: read without lock when the pool is already big enough,
+# fall back to the locked grow path only when first hitting a higher tid.
+@inline function _qlnn_get_thread_pool()
+    tid = Threads.threadid()
+    @inbounds tid <= length(_QLNN_THREAD_POOLS) && return _QLNN_THREAD_POOLS[tid]
+    _qlnn_ensure_thread_pools_capacity!(tid)
+    return @inbounds _QLNN_THREAD_POOLS[tid]
+end
+
+# ---------------------------------------------------------------------------
+#  Helpers for the threaded ensemble path
+# ---------------------------------------------------------------------------
+# In-place log10 + z-score normalization into a pre-allocated buffer `xx`.
+# `x` is read-only (shared across threads); `xx` is the thread-local scratch.
+function _qlnn_fill_normalized!(xx::AbstractMatrix{T}, model::QLNNmodel,
+                                x::AbstractMatrix{T}) where {T<:Real}
+    xnames = model.xnames
+    xm = model.xm
+    xσ = model.xσ
+    nfeat, nsamp = size(x)
+    @inbounds for i in 1:nfeat
+        log_row = endswith(xnames[i], log_suffix)
+        xm_i = T(xm[i])
+        xσ_i = T(xσ[i])
+        for j in 1:nsamp
+            v = x[i, j]
+            log_row && (v = log10(v))
+            xx[i, j] = (v - xm_i) / xσ_i
+        end
+    end
+    return xx
+end
+
+function _qlnn_fill_normalized!(xx::AbstractVector{T}, model::QLNNmodel,
+                                x::AbstractVector{T}) where {T<:Real}
+    xnames = model.xnames
+    xm = model.xm
+    xσ = model.xσ
+    @inbounds for i in eachindex(x)
+        v = x[i]
+        endswith(xnames[i], log_suffix) && (v = log10(v))
+        xx[i] = (v - T(xm[i])) / T(xσ[i])
+    end
+    return xx
+end
+
+# In-place denormalization: `out[i,j] = yn[i,j] * yσ[i] + ym[i]`.
+# Safe for aliased `out === yn` (same position read then written).
+@inline function _qlnn_denormalize_output!(out::AbstractMatrix{T}, yn::AbstractMatrix,
+                                           model::QLNNmodel) where {T<:Real}
+    ym = model.ym
+    yσ = model.yσ
+    @inbounds for i in axes(out, 1)
+        ym_i = T(ym[i])
+        yσ_i = T(yσ[i])
+        for j in axes(out, 2)
+            out[i, j] = T(yn[i, j]) * yσ_i + ym_i
+        end
+    end
+    return out
+end
+
+@inline function _qlnn_denormalize_output!(out::AbstractVector{T}, yn::AbstractVector,
+                                           model::QLNNmodel) where {T<:Real}
+    ym = model.ym
+    yσ = model.yσ
+    @inbounds for i in eachindex(out)
+        out[i] = T(yn[i]) * T(yσ[i]) + T(ym[i])
+    end
+    return out
+end
+
+# Forward pass through `model._pooled_chain` using the THREAD-indexed pool.
+# `xx` is the already-normalized input (written by `_qlnn_fill_normalized!`).
+# Result is written into `out` via `copyto!` + pool rewind, same as PooledChain
+# but with a persistent thread-local pool instead of a fresh task-local one.
+@inline function _qlnn_forward_threaded!(out::AbstractVecOrMat{T},
+                                         model::QLNNmodel,
+                                         xx::AbstractVecOrMat{T}) where {T<:Real}
+    pool = _qlnn_get_thread_pool()
+    checkpoint!(pool, T)
+    copyto!(out, _forward_with_pool(model._pooled_chain.model, xx, pool))
+    rewind!(pool, T)
+    return out
+end
+
 # QLNN's pooled-chain forward pass is dominated by tiny matmuls (≤64-wide
 # layers). With Julia on 1 thread and OpenBLAS spread across many cores, every
 # GEMM call pays ~ms of thread-team setup/teardown for ~μs of FLOPs, so the
@@ -471,18 +606,37 @@ end
 # classifier, callers should use `predict_unstable_prob` instead, which
 # averages probabilities (post-σ) rather than logits.
 #
-# When `Threads.nthreads() > 1` we run all members in parallel, each with
-# its own per-thread pool buffer (PooledChain uses task-local pools, so
-# `predict!` is thread-safe). On 1 thread (or `nmodels == 1`) we reuse a
-# single output buffer to keep allocation count low.
+# Threading strategy:
+#   Threaded path  — use `_qlnn_forward_threaded!` which checkpoints the
+#     thread-indexed `_QLNN_THREAD_POOLS[threadid()]` pool, runs
+#     `_forward_with_pool`, then rewinds.  Thread-indexed pools are allocated
+#     once at module load and reused across all `@threads` calls, so there are
+#     zero fresh-allocation cold-starts and zero GC pressure in steady state.
+#     PooledChain is NOT used here because it calls `get_task_local_pool()`,
+#     which returns a fresh empty pool for every new task spawned by @threads.
+#   Single-thread path — use `predict!` + PooledChain so the pool stays warm
+#     across repeated calls (e.g., per-radial single-member inference).
 function predict(ens::QLNNensemble, x::AbstractMatrix{T}) where {T<:Real}
     nmodels = length(ens.models)
     nouts = length(ens.models[1].ynames)
-    nsamp = size(x, 2)
+    nfeat, nsamp = size(x)
     if _qlnn_should_thread(nmodels)
         all_yy = Array{T,3}(undef, nouts, nsamp, nmodels)
+        # One normalized-input scratch buffer per MEMBER (indexed by k, not
+        # by threadid).  Each k appears exactly once in @threads, so there is
+        # no data race and we allocate nmodels (≤20) matrices instead of
+        # nthreads (≤256), avoiding ~12 MiB of unused scratch per head call.
+        # The forward pass uses _qlnn_forward_threaded! which checkpoints the
+        # thread-indexed AdaptiveArrayPool, so intermediate layer buffers are
+        # reused across run_qlnn calls with zero GC pressure in steady state.
+        input_bufs = [Matrix{T}(undef, nfeat, nsamp) for _ in 1:nmodels]
         Threads.@threads for k in 1:nmodels
-            predict!(view(all_yy, :, :, k), ens.models[k], x)
+            m = ens.models[k]
+            xx = input_bufs[k]
+            _qlnn_fill_normalized!(xx, m, x)
+            slab = view(all_yy, :, :, k)
+            _qlnn_forward_threaded!(slab, m, xx)
+            _qlnn_denormalize_output!(slab, slab, m)
         end
         out = zeros(T, nouts, nsamp)
         @inbounds for k in 1:nmodels
@@ -505,10 +659,17 @@ end
 function predict(ens::QLNNensemble, x::AbstractVector{T}) where {T<:Real}
     nmodels = length(ens.models)
     nouts = length(ens.models[1].ynames)
+    nfeat = length(x)
     if _qlnn_should_thread(nmodels)
         all_yy = Matrix{T}(undef, nouts, nmodels)
+        input_bufs = [Vector{T}(undef, nfeat) for _ in 1:nmodels]
         Threads.@threads for k in 1:nmodels
-            predict!(view(all_yy, :, k), ens.models[k], x)
+            m = ens.models[k]
+            xx = input_bufs[k]
+            _qlnn_fill_normalized!(xx, m, x)
+            slab = view(all_yy, :, k)
+            _qlnn_forward_threaded!(slab, m, xx)
+            _qlnn_denormalize_output!(slab, slab, m)
         end
         out = zeros(T, nouts)
         @inbounds for k in 1:nmodels
@@ -552,14 +713,20 @@ function predict_unstable_prob(ens::QLNNensemble, x::AbstractMatrix{T}) where {T
     nmodels = length(ens.models)
     nouts = length(ens.models[1].ynames)
     nsamp = size(x, 2)
+    nfeat = size(x, 1)
     if _qlnn_should_thread(nmodels)
         # Mean-of-probabilities: σ each member's logits FIRST, then average.
         # Differs from σ(mean-of-logits) near the decision boundary; matches
         # the convention used at training time.
         all_yy = Array{T,3}(undef, nouts, nsamp, nmodels)
+        input_bufs = [Matrix{T}(undef, nfeat, nsamp) for _ in 1:nmodels]
         Threads.@threads for k in 1:nmodels
+            m = ens.models[k]
+            xx = input_bufs[k]
+            _qlnn_fill_normalized!(xx, m, x)
             slab = view(all_yy, :, :, k)
-            predict!(slab, ens.models[k], x)
+            _qlnn_forward_threaded!(slab, m, xx)
+            _qlnn_denormalize_output!(slab, slab, m)
             @inbounds for j in 1:nsamp, i in 1:nouts
                 slab[i, j] = Flux.sigmoid(slab[i, j])
             end
@@ -589,11 +756,17 @@ function predict_unstable_prob(ens::QLNNensemble, x::AbstractVector{T}) where {T
         error("predict_unstable_prob: classifier.target must be :stability, got $(ens.models[1].target)")
     nmodels = length(ens.models)
     nouts = length(ens.models[1].ynames)
+    nfeat = length(x)
     if _qlnn_should_thread(nmodels)
         all_yy = Matrix{T}(undef, nouts, nmodels)
+        input_bufs = [Vector{T}(undef, nfeat) for _ in 1:nmodels]
         Threads.@threads for k in 1:nmodels
+            m = ens.models[k]
+            xx = input_bufs[k]
+            _qlnn_fill_normalized!(xx, m, x)
             slab = view(all_yy, :, k)
-            predict!(slab, ens.models[k], x)
+            _qlnn_forward_threaded!(slab, m, xx)
+            _qlnn_denormalize_output!(slab, slab, m)
             @inbounds for i in eachindex(slab)
                 slab[i] = Flux.sigmoid(slab[i])
             end
