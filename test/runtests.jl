@@ -1,6 +1,6 @@
 using Test
 using TurbulentTransport
-using TurbulentTransport: InputTGLF, flux_array, flux_solution, loadmodel, available_models
+using TurbulentTransport: InputTGLF, InputTJLF, flux_array, flux_solution, loadmodel, available_models
 using TurbulentTransport: TGLFNNmodel, TGLFNNensemble
 import Flux
 using TurbulentTransport.Measurements
@@ -29,6 +29,8 @@ else
     include("test_utils.jl")
     include("test_input_tglfs.jl")
     include("test_pooled_chain.jl")
+    include("test_dual_pool_compatibility.jl")
     include("test_model_selector.jl")
     include("test_qlgyro.jl")
+    include("test_qlnn.jl")
 end

@@ -75,3 +75,25 @@ function available_models()
     end
     unique!(models)  # First-seen wins (providers before builtin)
 end
+
+"""
+    available_qlnn_bundles()
+
+Return list of available QLNN bundle directory names (one per subdirectory
+that contains an `energy_regressor.bson`). Bundles from registered providers
+appear first.
+"""
+function available_qlnn_bundles()
+    bundles = String[]
+    all_paths = vcat(_MODEL_SEARCH_PATHS, [joinpath(dirname(@__DIR__), "models")])
+    for dir in all_paths
+        isdir(dir) || continue
+        for entry in readdir(dir; join=false)
+            sub = joinpath(dir, entry)
+            isdir(sub) || continue
+            isfile(joinpath(sub, "energy_regressor.bson")) || continue
+            push!(bundles, entry)
+        end
+    end
+    unique!(bundles)
+end
