@@ -33,4 +33,5 @@ else
     include("test_model_selector.jl")
     include("test_qlgyro.jl")
     include("test_qlnn.jl")
+    include("test_qlnn_fluctuation_spectra.jl")
 end

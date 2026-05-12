@@ -32,7 +32,9 @@ include("qlgyro.jl")
 include("utils.jl")
 
 export InputTGLF, InputTJLF, available_models, available_qlnn_bundles, model_selector
-export run_qlnn, loadqlnnbundle, loadqlnnmodel, QLNNmodel, QLNNensemble, QLNNbundle
+export run_qlnn, qlnn_fluctuation_spectra, loadqlnnbundle, loadqlnnmodel
+export QLNNmodel, QLNNensemble, QLNNbundle
+export qlnn_to_gpu, qlnn_fluctuation_spectra_gpu
 
 const document = Dict()
 document[Symbol(@__MODULE__)] = [name for name in Base.names(@__MODULE__; all=false, imported=false) if name != Symbol(@__MODULE__)]
