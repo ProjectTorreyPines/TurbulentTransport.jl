@@ -1,0 +1,2 @@
+models/**/*.bson filter=lfs diff=lfs merge=lfs -text
+models/*.bson filter=lfs diff=lfs merge=lfs -text
