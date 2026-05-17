@@ -1246,7 +1246,7 @@ function _run_qlnn_predict(input_tjlfs::Vector{TJLF.InputTJLF{T}}, bundle::QLNNb
     # `eltype(xs_all)`, so Duals flow through unchanged.
     Y_energy   = predict(bundle.energy,     xs_all)
     Y_particle = predict(bundle.particle,   xs_all)
-    Y_momentum = predict(bundle.momentum,   xs_all)
+    Y_momentum = -predict(bundle.momentum,  xs_all)  # trained with wrong sign; flip here
     Y_eig      = predict(bundle.eigenvalue, xs_all)
     # Stability classifier output is `(1, total_nky)`; `vec(...)` flattens
     # so phase 4 can index `P_unstable[c0+j-1]` per radial chunk. Comparing
