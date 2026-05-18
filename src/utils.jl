@@ -7,7 +7,7 @@ Returns the mutated struct.
 """
 function load(input::Union{InputTGLF,InputCGYRO,InputQLGYRO}, filename::AbstractString)
     lines = open(filename, "r") do file
-        filter(x -> !isempty(x), map(strip, split(read(file, String), "\n")))
+        filter(x -> !isempty(x) && !startswith(x, "#"), map(strip, split(read(file, String), "\n")))
     end
 
     ip_dict = Dict{Symbol,String}()

@@ -961,6 +961,7 @@ function run_qlgyro(input_cgyro::InputCGYRO, input_qlgyro::InputQLGYRO;
 
     state = load_run_state(basedir)
     if state !== nothing && state.input_hash == input_hash
+        state.basedir = basedir
         @info "Found existing QLGYRO run state. Checking status..."
     else
         nky = length(ky_grid)

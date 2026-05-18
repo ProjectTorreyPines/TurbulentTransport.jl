@@ -1,6 +1,6 @@
 #!/bin/bash
 #=============================================================
-# qljyro
+# qlgyro
 #
 # PURPOSE:
 #  Top-level script controlling execution of the Julia QLGYRO
@@ -8,7 +8,7 @@
 #  the Fortran qlgyro CLI flags so that an existing
 #  input.cgyro + input.qlgyro pair can be run with:
 #
-#      qljyro -n 12 -e .
+#      qlgyro -n 12 -e .
 #=============================================================
 
 # Resolve absolute path of this script BEFORE any cd (the -e . case rewrites $PWD).
@@ -18,14 +18,14 @@ while [ -L "$SCRIPT_PATH" ]; do
   SCRIPT_PATH=$(readlink "$SCRIPT_PATH")
   [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
 done
-QLJYRO_DIR=$(cd -P "$(dirname "$SCRIPT_PATH")" >/dev/null 2>&1 && pwd)
-PKG_DIR=$(dirname "$QLJYRO_DIR")
-DRIVER="$QLJYRO_DIR/qljyro_driver.jl"
+QLGYRO_DIR=$(cd -P "$(dirname "$SCRIPT_PATH")" >/dev/null 2>&1 && pwd)
+PKG_DIR=$(dirname "$QLGYRO_DIR")
+DRIVER="$QLGYRO_DIR/qlgyro_driver.jl"
 
 if [ $# -eq 0 ]; then
   cat <<'EOF'
 
-Usage:   qljyro [options]
+Usage:   qlgyro [options]
 
          -p <path>
          Optional path to simulation directory (default: $PWD).
@@ -66,7 +66,7 @@ while [ $# -gt 0 ]; do
     -nomp)     shift; NOMP=$1 ;;
     --local)   EXEC_MODE="local" ;;
     --cluster) EXEC_MODE="cluster" ;;
-    *)         echo "ERROR: incorrect qljyro syntax (unknown flag: $1)"; exit 1 ;;
+    *)         echo "ERROR: incorrect qlgyro syntax (unknown flag: $1)"; exit 1 ;;
   esac
   shift
 done
