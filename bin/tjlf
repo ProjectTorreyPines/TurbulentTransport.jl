@@ -1,0 +1,77 @@
+#!/bin/bash
+#=============================================================
+# tjlf
+#
+# PURPOSE:
+#  Top-level script controlling execution of TJLF (Julia TGLF
+#  reimplementation). Reads input.tglf or input.tjlf from the
+#  simulation directory, runs TJLF end-to-end, and writes
+#  out.tglf.gbflux.
+#
+#      tjlf -e .
+#=============================================================
+
+# Resolve absolute path of this script BEFORE any cd (the -e . case rewrites $PWD).
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_PATH" ]; do
+  SCRIPT_DIR=$(cd -P "$(dirname "$SCRIPT_PATH")" >/dev/null 2>&1 && pwd)
+  SCRIPT_PATH=$(readlink "$SCRIPT_PATH")
+  [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
+done
+TJLF_BIN_DIR=$(cd -P "$(dirname "$SCRIPT_PATH")" >/dev/null 2>&1 && pwd)
+PKG_DIR=$(dirname "$TJLF_BIN_DIR")
+DRIVER="$TJLF_BIN_DIR/tjlf_driver.jl"
+
+if [ $# -eq 0 ]; then
+  cat <<'EOF'
+
+Usage:   tjlf [options]
+
+         -p <path>
+         Optional path to simulation directory (default: $PWD).
+
+         -e <simdir>
+         Run TJLF using input.tglf (or input.tjlf) in <simdir>.
+
+EOF
+  exit 1
+fi
+
+# Defaults
+SIMROOT=$PWD
+LOCDIR=""
+EXEC_FLAG=0
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -p) shift; SIMROOT=$1 ;;
+    -e) shift; LOCDIR=$1; EXEC_FLAG=1 ;;
+    *)  echo "ERROR: incorrect tjlf syntax (unknown flag: $1)"; exit 1 ;;
+  esac
+  shift
+done
+
+if [ "$LOCDIR" == "." ]; then
+  LOCDIR=$(basename "$PWD")
+  cd ..
+  SIMROOT=$PWD
+fi
+
+if [ $EXEC_FLAG -eq 0 ] || [ -z "$LOCDIR" ]; then
+  echo "ERROR: must pass -e <simdir>"
+  exit 1
+fi
+
+# Allow -e to be an absolute path
+if [[ "$LOCDIR" = /* ]]; then
+  SIMDIR="$LOCDIR"
+else
+  SIMDIR="$SIMROOT/$LOCDIR"
+fi
+if [ ! -d "$SIMDIR" ]; then
+  echo "ERROR: simdir does not exist: $SIMDIR"
+  exit 1
+fi
+
+JULIA=${JULIA:-julia}
+exec "$JULIA" --project="$PKG_DIR" "$DRIVER" --simdir="$SIMDIR"

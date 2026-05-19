@@ -15,7 +15,7 @@ Base.@kwdef mutable struct InputCGYRO
     S::Union{Float64,Missing} = missing
     BTCCW::Union{Float64,Missing} = missing
     IPCCW::Union{Float64,Missing} = missing
-    UDSYMMETRY_FLAG::Union{Float64,Missing} = missing
+    UDSYMMETRY_FLAG::Union{Int,Missing} = missing
 
     SHAPE_COS0::Union{Float64,Missing} = missing
     SHAPE_S_COS0::Union{Float64,Missing} = missing

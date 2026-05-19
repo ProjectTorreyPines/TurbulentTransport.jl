@@ -1,0 +1,106 @@
+#!/bin/bash
+#=============================================================
+# qlgyro
+#
+# PURPOSE:
+#  Top-level script controlling execution of the Julia QLGYRO
+#  (linear CGYRO + TJLF saturation rules). Mimics a subset of
+#  the Fortran qlgyro CLI flags so that an existing
+#  input.cgyro + input.qlgyro pair can be run with:
+#
+#      qlgyro -n 12 -e .
+#=============================================================
+
+# Resolve absolute path of this script BEFORE any cd (the -e . case rewrites $PWD).
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_PATH" ]; do
+  SCRIPT_DIR=$(cd -P "$(dirname "$SCRIPT_PATH")" >/dev/null 2>&1 && pwd)
+  SCRIPT_PATH=$(readlink "$SCRIPT_PATH")
+  [[ "$SCRIPT_PATH" != /* ]] && SCRIPT_PATH="$SCRIPT_DIR/$SCRIPT_PATH"
+done
+QLGYRO_DIR=$(cd -P "$(dirname "$SCRIPT_PATH")" >/dev/null 2>&1 && pwd)
+PKG_DIR=$(dirname "$QLGYRO_DIR")
+DRIVER="$QLGYRO_DIR/qlgyro_driver.jl"
+
+if [ $# -eq 0 ]; then
+  cat <<'EOF'
+
+Usage:   qlgyro [options]
+
+         -p <path>
+         Optional path to simulation directory (default: $PWD).
+
+         -e <simdir>
+         Run QLGYRO using input.cgyro + input.qlgyro in <simdir>.
+
+         -n <MPI tasks>
+         Number of MPI tasks (CGYRO ranks per ky run).
+
+         -nomp <threads>
+         Number of OpenMP threads per MPI task.
+
+         --local
+         Force local mode (run cgyro directly via the local `cgyro` script).
+         Auto-detected when sbatch is not on PATH.
+
+         --cluster
+         Force cluster mode (submit each ky as a slurm job).
+
+EOF
+  exit 1
+fi
+
+# Defaults
+SIMROOT=$PWD
+LOCDIR=""
+NPROC=1
+NOMP=1
+EXEC_FLAG=0
+EXEC_MODE=""   # "" (auto), "local", or "cluster"
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -p)        shift; SIMROOT=$1 ;;
+    -e)        shift; LOCDIR=$1; EXEC_FLAG=1 ;;
+    -n)        shift; NPROC=$1 ;;
+    -nomp)     shift; NOMP=$1 ;;
+    --local)   EXEC_MODE="local" ;;
+    --cluster) EXEC_MODE="cluster" ;;
+    *)         echo "ERROR: incorrect qlgyro syntax (unknown flag: $1)"; exit 1 ;;
+  esac
+  shift
+done
+
+if [ "$LOCDIR" == "." ]; then
+  LOCDIR=$(basename "$PWD")
+  cd ..
+  SIMROOT=$PWD
+fi
+
+if [ $EXEC_FLAG -eq 0 ] || [ -z "$LOCDIR" ]; then
+  echo "ERROR: must pass -e <simdir>"
+  exit 1
+fi
+
+if [[ "$LOCDIR" = /* ]]; then
+  SIMDIR="$LOCDIR"
+else
+  SIMDIR="$SIMROOT/$LOCDIR"
+fi
+if [ ! -d "$SIMDIR" ]; then
+  echo "ERROR: simdir does not exist: $SIMDIR"
+  exit 1
+fi
+
+EXTRA_ARGS=()
+case "$EXEC_MODE" in
+  local)   EXTRA_ARGS+=(--local) ;;
+  cluster) EXTRA_ARGS+=(--cluster) ;;
+esac
+
+JULIA=${JULIA:-julia}
+exec "$JULIA" --project="$PKG_DIR" "$DRIVER" \
+     --simdir="$SIMDIR" \
+     --n="$NPROC" \
+     --nomp="$NOMP" \
+     "${EXTRA_ARGS[@]}"

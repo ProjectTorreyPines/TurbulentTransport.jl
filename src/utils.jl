@@ -1,4 +1,103 @@
 """
+    load(input::Union{InputTGLF,InputCGYRO,InputQLGYRO}, filename::AbstractString)
+
+Reads `input.tglf`, `input.tglf.gen`, `input.cgyro`, or `input.qlgyro` files (key=value or
+gen-style `value  key` format) and populates the given input struct in place.
+Returns the mutated struct.
+"""
+function load(input::Union{InputTGLF,InputCGYRO,InputQLGYRO}, filename::AbstractString)
+    lines = open(filename, "r") do file
+        filter(x -> !isempty(x) && !startswith(x, "#"), map(strip, split(read(file, String), "\n")))
+    end
+
+    ip_dict = Dict{Symbol,String}()
+    if all(l -> occursin("=", l), lines)
+        for line in lines
+            field, value = map(strip, split(line, "="))
+            ip_dict[Symbol(field)] = value
+        end
+    elseif all(l -> occursin("  ", l), lines)
+        for line in lines
+            value, field = map(strip, split(line, "  "))
+            ip_dict[Symbol(field)] = value
+        end
+    else
+        error("invalid input file: $(filename)")
+    end
+
+    _unwrap_missing(::Type{Missing}) = Missing
+    function _unwrap_missing(ft)::Type
+        if ft isa Union
+            parts = Base.uniontypes(ft)
+            rs = filter(!=(Missing), parts)
+            return length(rs) == 1 ? rs[1] : ft
+        elseif ft isa UnionAll
+            inner = Base.unwrap_unionall(ft)
+            return inner === ft ? ft : _unwrap_missing(inner)
+        else
+            return ft
+        end
+    end
+
+    cfield_types = fieldtypes(typeof(input))
+    fnames = fieldnames(typeof(input))
+
+    for (idx, fname) in enumerate(fnames)
+        fname ∈ keys(ip_dict) || continue
+        raw = ip_dict[fname]
+        ftype = _unwrap_missing(cfield_types[idx])
+
+        lraw = lowercase(raw)
+        if lraw in (".true.", "true") || raw == "T"
+            setproperty!(input, fname, true)
+            continue
+        elseif lraw in (".false.", "false") || raw == "F"
+            setproperty!(input, fname, false)
+            continue
+        end
+
+        if ftype <: AbstractString
+            setproperty!(input, fname, raw)
+            continue
+        end
+
+        if ftype <: Integer
+            val = try
+                Int(round(parse(Float64, raw)))
+            catch
+                error("Could not parse integer field $(fname) = $(raw)")
+            end
+            setproperty!(input, fname, val)
+            continue
+        end
+
+        if ftype <: Real
+            val = try
+                parse(Float64, raw)
+            catch
+                error("Could not parse real field $(fname) = $(raw)")
+            end
+            setproperty!(input, fname, val)
+            continue
+        end
+
+        st = string(ftype)
+        if occursin("Real", st) || occursin("Float", st) || occursin("Int", st)
+            val = try
+                parse(Float64, raw)
+            catch
+                error("Could not parse numeric-like field $(fname) = $(raw)")
+            end
+            setproperty!(input, fname, val)
+            continue
+        end
+
+        error("parameter $(fname) of type ($(ftype)) not recognized: $(raw)")
+    end
+    return input
+end
+
+"""
     save(input::Union{InputTGLF, InputCGYRO}, filename::AbstractString)
 
 Write input_tglf/input_cgyro to file in input.tglf/input.cgyro/input.qlgyro format to be read by TGLF/CGYRO
