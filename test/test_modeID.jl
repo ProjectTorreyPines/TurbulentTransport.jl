@@ -155,3 +155,95 @@ end
         @test !isempty(sprint(show, MIME"text/plain"(), mid))
     end
 end
+
+# ============================================================
+#  QLNN-based Mode Identification (run_modeid_qlnn)
+# ============================================================
+# Guarded by bundle directory availability, matching test_qlnn.jl.
+
+const _MODEID_QLNN_BUNDLE_DIR = joinpath(dirname(@__DIR__), "models", "QLNN")
+
+if !isdir(_MODEID_QLNN_BUNDLE_DIR)
+    @info "Skipping QLNN ModeID tests; bundle directory not found: $_MODEID_QLNN_BUNDLE_DIR"
+else
+    import TJLF
+
+    @testset "QLNN ModeID (run_modeid_qlnn)" begin
+        input_tglf = load_sample_input()
+        input_tjlf = InputTJLF{Float64}(input_tglf)
+
+        @testset "single InputTJLF produces TJLFModeIdentification" begin
+            results = TurbulentTransport.run_modeid_qlnn([input_tjlf]; bundle_name="QLNN")
+            @test length(results) == 1
+            mid = results[1]
+            @test mid isa TurbulentTransport.TJLFModeIdentification{Float64}
+        end
+
+        @testset "all TJLFModeIdentification fields are well-formed" begin
+            results = TurbulentTransport.run_modeid_qlnn([input_tjlf]; bundle_name="QLNN")
+            mid = results[1]
+
+            @test mid.dominant_mode isa TurbulentTransport.TurbulenceMode
+            @test 0.0 <= mid.dominant_mode_fraction <= 1.0
+            @test !isempty(mid.mode_per_ky)
+            @test all(m -> m isa TurbulentTransport.TurbulenceMode, mid.mode_per_ky)
+            @test length(mid.ky_spectrum) == length(mid.mode_per_ky)
+            @test all(isfinite, mid.ky_spectrum)
+
+            @test length(mid.energy_flux_per_mode) == length(instances(TurbulentTransport.TurbulenceMode))
+            for mode in instances(TurbulentTransport.TurbulenceMode)
+                @test haskey(mid.energy_flux_per_mode, mode)
+                @test isfinite(mid.energy_flux_per_mode[mode])
+            end
+        end
+
+        @testset "flux_solution is finite" begin
+            results = TurbulentTransport.run_modeid_qlnn([input_tjlf]; bundle_name="QLNN")
+            sol = results[1].flux_solution
+            @test sol isa TurbulentTransport.GACODE.FluxSolution
+            @test isfinite(sol.ENERGY_FLUX_e)
+            @test isfinite(sol.ENERGY_FLUX_i)
+            @test isfinite(sol.PARTICLE_FLUX_e)
+            @test isfinite(sol.STRESS_TOR_i)
+        end
+
+        @testset "multiple InputTJLFs produce per-point results" begin
+            it2 = InputTJLF{Float64}(load_sample_input())
+            it2.RLTS[2] *= 1.5
+            results = TurbulentTransport.run_modeid_qlnn([input_tjlf, it2]; bundle_name="QLNN")
+            @test length(results) == 2
+            @test all(r -> r isa TurbulentTransport.TJLFModeIdentification, results)
+        end
+
+        @testset "empty input returns empty results" begin
+            results = TurbulentTransport.run_modeid_qlnn(InputTJLF{Float64}[]; bundle_name="QLNN")
+            @test isempty(results)
+        end
+
+        @testset "results are deterministic" begin
+            r1 = TurbulentTransport.run_modeid_qlnn([InputTJLF{Float64}(load_sample_input())]; bundle_name="QLNN")
+            r2 = TurbulentTransport.run_modeid_qlnn([InputTJLF{Float64}(load_sample_input())]; bundle_name="QLNN")
+            @test r1[1].dominant_mode == r2[1].dominant_mode
+            @test r1[1].dominant_mode_fraction ≈ r2[1].dominant_mode_fraction
+            @test r1[1].mode_per_ky == r2[1].mode_per_ky
+        end
+
+        @testset "show method does not error" begin
+            results = TurbulentTransport.run_modeid_qlnn([input_tjlf]; bundle_name="QLNN")
+            @test !isempty(sprint(show, MIME"text/plain"(), results[1]))
+        end
+
+        @testset "classification thresholds affect mode assignment" begin
+            r_default = TurbulentTransport.run_modeid_qlnn(
+                [InputTJLF{Float64}(load_sample_input())];
+                bundle_name="QLNN", em_threshold=0.5, ion_electron_threshold=0.5)
+
+            r_strict_em = TurbulentTransport.run_modeid_qlnn(
+                [InputTJLF{Float64}(load_sample_input())];
+                bundle_name="QLNN", em_threshold=0.01, ion_electron_threshold=0.5)
+
+            @test r_default[1] isa TurbulentTransport.TJLFModeIdentification
+            @test r_strict_em[1] isa TurbulentTransport.TJLFModeIdentification
+        end
+    end
+end

@@ -1073,6 +1073,74 @@ end
 function run_qlnn(input_tjlfs::Vector{TJLF.InputTJLF{T}}, bundle::QLNNbundle;
                   warn_nn_train_bounds::Bool = false,
                   stability_threshold::Real = 0.5) where {T<:Real}
+    nr = length(input_tjlfs)
+    flux_solutions = Vector{GACODE.FluxSolution{T}}(undef, nr)
+    if nr == 0
+        return flux_solutions
+    end
+
+    pred = _run_qlnn_predict(input_tjlfs, bundle; warn_nn_train_bounds=warn_nn_train_bounds)
+    nf = pred.info_e.nf
+    ns = pred.info_e.ns
+
+    # === Phase 4: per-radial QL packing + sum_ky_spectrum ==============
+    # Independent across radial points and free of NN forward passes, so
+    # threading here doesn't contend with BLAS threads inside `predict`.
+    Threads.@threads for r in 1:nr
+        c0 = pred.chunk_starts[r]
+        nk = pred.nky_r[r]
+        cols = c0:c0+nk-1
+        ks = pred.ky_spectrums[r]
+        mask = nothing
+        if pred.P_unstable !== nothing
+            mask = Bool[pred.P_unstable[c0+j-1] >= stability_threshold for j in 1:nk]
+        end
+        flux_solutions[r] = _qlnn_integrate_radial(
+            input_tjlfs[r], pred.sat_params_v[r], ks,
+            view(pred.Y_energy,   :, cols),
+            view(pred.Y_particle, :, cols),
+            view(pred.Y_momentum, :, cols),
+            view(pred.Y_eig,      :, cols),
+            mask, pred.info_e, pred.info_p, pred.info_m,
+            pred.eig_norm_by_ky, nf, ns,
+        )
+    end
+    return flux_solutions
+end
+
+"""
+    _run_qlnn_predict(input_tjlfs, bundle; warn_nn_train_bounds=false) -> NamedTuple
+
+Internal helper that runs phases 1-3 of the QLNN pipeline (per-radial setup,
+batched feature matrix construction, and one NN forward pass per head) and
+returns all artifacts needed to either:
+
+1. complete the flux integration (`run_qlnn` calls `_qlnn_integrate_radial` per
+   radial point), or
+2. reconstruct the 2D fluctuation spectrum
+   (`qlnn_fluctuation_spectra` builds QL/Γ tensors and calls `intensity_sat`).
+
+Mutates each `input_tjlf` in place: sets `NMODES = 1`, refreshes `KY_SPECTRUM`,
+and stores `SaturationParameters` per radial point.
+
+Returned NamedTuple fields:
+- `sat_params_v::Vector{...}`     - per-radial `TJLF.SaturationParameters`
+- `ky_spectrums::Vector{...}`     - per-radial ky vector
+- `nky_r::Vector{Int}`            - `length(ky_spectrums[r])`
+- `chunk_starts::Vector{Int}`     - 1-based start column in `Y_*` for each r
+- `Y_energy / Y_particle / Y_momentum`  - `(n_outputs, total_nky)` predictions
+- `Y_eig`                          - `(n_eig_outputs, total_nky)` predictions
+- `P_unstable::Union{Nothing,Vector}`   - flattened σ-output of stability head
+- `info_e / info_p / info_m`      - parsed QL-weight ynames metadata
+- `eig_norm_by_ky::Bool`          - whether eigenvalue head was trained on `γ/ky`
+- `xs_all::Matrix{T}`              - the (n_features, total_nky) batched inputs
+                                    (kept so callers like `qlnn_fluctuation_spectra`
+                                    can run additional NN heads — e.g. a width
+                                    regressor — on the same feature matrix).
+- `energy_xnames::Vector{String}` - shared xnames across the bundle members.
+"""
+function _run_qlnn_predict(input_tjlfs::Vector{TJLF.InputTJLF{T}}, bundle::QLNNbundle;
+                           warn_nn_train_bounds::Bool = false) where {T<:Real}
     _qlnn_maybe_perf_hint()
     # Pre-parse ynames once per bundle (regressors share xnames, but ynames
     # may differ slightly between {energy, particle, momentum}).
@@ -1098,14 +1166,8 @@ function run_qlnn(input_tjlfs::Vector{TJLF.InputTJLF{T}}, bundle::QLNNbundle;
         bundle.stability.xnames == energy_xnames ||
             error("QLNN bundle: stability classifier xnames mismatch with energy regressor.")
     end
-    nf = info_e.nf
-    ns = info_e.ns
 
     nr = length(input_tjlfs)
-    flux_solutions = Vector{GACODE.FluxSolution{T}}(undef, nr)
-    if nr == 0
-        return flux_solutions
-    end
 
     # === Phase 1: per-radial setup =====================================
     # Set NMODES=1 (QLNN predicts one dominant mode per ky), pull
@@ -1184,7 +1246,7 @@ function run_qlnn(input_tjlfs::Vector{TJLF.InputTJLF{T}}, bundle::QLNNbundle;
     # `eltype(xs_all)`, so Duals flow through unchanged.
     Y_energy   = predict(bundle.energy,     xs_all)
     Y_particle = predict(bundle.particle,   xs_all)
-    Y_momentum = predict(bundle.momentum,   xs_all)
+    Y_momentum = -predict(bundle.momentum,  xs_all)  # trained with wrong sign; flip here
     Y_eig      = predict(bundle.eigenvalue, xs_all)
     # Stability classifier output is `(1, total_nky)`; `vec(...)` flattens
     # so phase 4 can index `P_unstable[c0+j-1]` per radial chunk. Comparing
@@ -1193,30 +1255,17 @@ function run_qlnn(input_tjlfs::Vector{TJLF.InputTJLF{T}}, bundle::QLNNbundle;
     P_unstable = bundle.stability === nothing ? nothing :
                  vec(predict_unstable_prob(bundle.stability, xs_all))
 
-    # === Phase 4: per-radial QL packing + sum_ky_spectrum ==============
-    # Independent across radial points and free of NN forward passes, so
-    # threading here doesn't contend with BLAS threads inside `predict`.
     eig_norm_by_ky = bundle.eigenvalue.normalize_by_ky
-    Threads.@threads for r in 1:nr
-        c0 = chunk_starts[r]
-        nk = nky_r[r]
-        cols = c0:c0+nk-1
-        ks = ky_spectrums[r]
-        mask = nothing
-        if P_unstable !== nothing
-            mask = Bool[P_unstable[c0+j-1] >= stability_threshold for j in 1:nk]
-        end
-        flux_solutions[r] = _qlnn_integrate_radial(
-            input_tjlfs[r], sat_params_v[r], ks,
-            view(Y_energy,   :, cols),
-            view(Y_particle, :, cols),
-            view(Y_momentum, :, cols),
-            view(Y_eig,      :, cols),
-            mask, info_e, info_p, info_m,
-            eig_norm_by_ky, nf, ns,
-        )
-    end
-    return flux_solutions
+
+    return (;
+        sat_params_v, ky_spectrums, nky_r, chunk_starts,
+        Y_energy, Y_particle, Y_momentum, Y_eig,
+        P_unstable,
+        info_e, info_p, info_m,
+        eig_norm_by_ky,
+        xs_all,
+        energy_xnames,
+    )
 end
 
 # Per-radial-point integration: pack pre-computed predictions into the TJLF
@@ -1272,6 +1321,394 @@ function _qlnn_integrate_radial(input_tjlf::TJLF.InputTJLF{T},
         TJLF.Πi(QL_flux_out),
     )
 end
+
+# ============================================================================
+#  qlnn_fluctuation_spectra: QLNN-driven 2D `|φ|²(kx, ky, mode)` reconstruction
+# ============================================================================
+#
+# Mirrors `TurbulentTransport.fluctuation_spectra` for the QLNN bundle path.
+# The TJLF saturation rule (`intensity_sat` + the Staebler kx-Lorentzian shape)
+# stays exactly the same; only the upstream γ/ω/QL_weights tensors are sourced
+# from QLNN forward passes instead of a TJLF eigenvalue solve.
+#
+# Width handling:
+#   - If `width_model::QLNNmodel|QLNNensemble` is supplied AND it was trained
+#     with `EV_AS_INPUTS=true` (xnames contain `cgyro_gamma` / `cgyro_omega`),
+#     we run a chained per-ky inference (γ/ω from `bundle.eigenvalue` are
+#     spliced in as inputs) and write the predictions into
+#     `input_tjlf.WIDTH_SPECTRUM`. `xgrid_functions_geo` reads
+#     `WIDTH_SPECTRUM[ky_index]` while computing `kx0_e`, so the saturation
+#     rule sees the QLNN-predicted parallel mode widths.
+#   - If `width_model === nothing`, we leave `input_tjlf.WIDTH_SPECTRUM`
+#     untouched (caller should set it to a sensible per-ky vector before
+#     calling, e.g. via `input_tjlf.WIDTH_SPECTRUM .= input_tjlf.WIDTH`).
+
+# Mirror of `_qlnn_fill_xs!` for the chained width regressor: same behavior
+# for plain TGLF features and `ky`, but additionally fills the
+# `cgyro_gamma` / `cgyro_omega` rows from the predicted γ, ω vectors.
+#
+# `gamma_ky` and `omega_ky` are length-`nky` vectors (per-ky values) — already
+# multiplied by ky when `eig_norm_by_ky=true`, matching the `predict_gamma_omega`
+# convention from TrainQLweightNN.
+function _qlnn_fill_xs_with_eig!(xs::AbstractMatrix{T}, input_tjlf::TJLF.InputTJLF{T},
+                                 ky_spectrum::AbstractVector,
+                                 xnames::Vector{String},
+                                 gamma_ky::AbstractVector,
+                                 omega_ky::AbstractVector) where {T<:Real}
+    nky = size(xs, 2)
+    @assert length(ky_spectrum) == nky "_qlnn_fill_xs_with_eig!: nky mismatch (xs $nky cols, ky $(length(ky_spectrum)))"
+    @assert length(gamma_ky)    == nky "_qlnn_fill_xs_with_eig!: gamma_ky length mismatch"
+    @assert length(omega_ky)    == nky "_qlnn_fill_xs_with_eig!: omega_ky length mismatch"
+    @assert size(xs, 1) == length(xnames) "_qlnn_fill_xs_with_eig!: nfeat mismatch"
+    @inbounds for (i, name) in enumerate(xnames)
+        if name == "ky"
+            for j in 1:nky
+                xs[i, j] = ky_spectrum[j]
+            end
+        elseif name == "cgyro_gamma" || name == "gamma" || name == "gamma_in"
+            for j in 1:nky
+                xs[i, j] = T(gamma_ky[j])
+            end
+        elseif name == "cgyro_omega" || name == "omega" || name == "omega_in"
+            for j in 1:nky
+                xs[i, j] = T(omega_ky[j])
+            end
+        else
+            val = _qlnn_lookup_input_tjlf(input_tjlf, name)
+            if val === missing
+                error("QLNN width input field `$name` is `missing` in InputTJLF.")
+            end
+            scalar = T(val)
+            for j in 1:nky
+                xs[i, j] = scalar
+            end
+        end
+    end
+    return xs
+end
+
+# Resolve per-ky physical (γ, ω) from the eigenvalue head's predictions.
+# Mirrors `predict_gamma_omega`: when `eig_norm_by_ky=true` the head was
+# trained on `γ/ky` and `ω/ky`, so we recover the physical values by
+# multiplying both rows by `ky_spectrum[k]`.
+@inline function _qlnn_recover_eig(y_eig::AbstractMatrix{T},
+                                   ky_spectrum::AbstractVector,
+                                   eig_norm_by_ky::Bool) where {T<:Real}
+    nky = size(y_eig, 2)
+    γ = Vector{T}(undef, nky)
+    ω = Vector{T}(undef, nky)
+    if size(y_eig, 1) >= 2
+        @inbounds for k in 1:nky
+            γk = y_eig[1, k]
+            ωk = y_eig[2, k]
+            if eig_norm_by_ky
+                γk *= T(ky_spectrum[k])
+                ωk *= T(ky_spectrum[k])
+            end
+            γ[k] = γk
+            ω[k] = ωk
+        end
+    else
+        # Eigenvalue head only predicts γ (legacy bundle): zero out ω.
+        @inbounds for k in 1:nky
+            γk = y_eig[1, k]
+            if eig_norm_by_ky
+                γk *= T(ky_spectrum[k])
+            end
+            γ[k] = γk
+            ω[k] = zero(T)
+        end
+    end
+    return γ, ω
+end
+
+# Validate that a width regressor matches the chained-EV input contract
+# documented at TrainQLweightNN/src/TrainQLweightNN.jl:333. Returns true if
+# it does, false otherwise (so callers can fall back to the constant `WIDTH`).
+function _qlnn_width_uses_chained_eig(width_model::AbstractQLNNmodel)
+    width_xnames = width_model.xnames
+    has_gamma = any(x -> x == "cgyro_gamma" || x == "gamma" || x == "gamma_in", width_xnames)
+    has_omega = any(x -> x == "cgyro_omega" || x == "omega" || x == "omega_in", width_xnames)
+    return has_gamma && has_omega
+end
+
+"""
+    qlnn_fluctuation_spectra(input_tjlfs::Vector{InputTJLF{T}};
+                             bundle_name="QLNN",
+                             width_bundle_name="QLNN",
+                             warn_nn_train_bounds=false,
+                             stability_threshold=0.5,
+                             kx=nothing, n_kx=128, kx_max_sigma=6.0,
+                             use_width_nn=true)
+        -> Vector{NamedTuple}
+
+Per-radial-point version of [`fluctuation_spectra`](@ref) that sources the
+upstream γ/ω/QL_weights tensors from a QLNN bundle instead of running TJLF's
+eigenvalue solver. The TJLF saturation rule (`intensity_sat`) and the
+Staebler kx-Lorentzian reconstruction are identical to the TJLF path.
+
+Returns one `NamedTuple` per radial point with:
+- `fs::TJLFFluctuationSpectra{T}` — same struct the TJLF path returns.
+- `eigenvalue::Array{T,3}` of shape `(1, nky, 2)` — `[mode, ky, 1]=γ`, `[mode, ky, 2]=ω`.
+  Matches the `tjlf_result.eigenvalue` slice the synth-diag pipeline reads.
+
+If `use_width_nn=true`, the bundle's `width_regressor.bson` is loaded
+(searched in `bundle_name` first, then `width_bundle_name`) and per-ky
+predictions are written to `input_tjlf.WIDTH_SPECTRUM` BEFORE calling
+`intensity_sat`. If the file is missing or its xnames don't follow the
+chained `cgyro_gamma`/`cgyro_omega` contract, falls back to setting
+`WIDTH_SPECTRUM .= WIDTH` (TJLF's default constant width across ky) with a
+one-time `@warn`.
+"""
+function qlnn_fluctuation_spectra(input_tjlfs::Vector{TJLF.InputTJLF{T}};
+                                  bundle_name::AbstractString = "QLNN",
+                                  width_bundle_name::AbstractString = "",
+                                  warn_nn_train_bounds::Bool = false,
+                                  stability_threshold::Real = 0.5,
+                                  kx::Union{Nothing,AbstractVector} = nothing,
+                                  n_kx::Int = 128,
+                                  kx_max_sigma::Real = 6.0,
+                                  use_width_nn::Bool = true) where {T<:Real}
+    bundle = loadqlnnbundleonce(String(bundle_name))
+    width_model = nothing
+    if use_width_nn
+        # Try bundle dir first, then `width_bundle_name` if specified.
+        for dir in (bundle.dir,
+                    isempty(width_bundle_name) ? "" : _resolve_qlnn_dir(width_bundle_name))
+            isempty(dir) && continue
+            width_path = joinpath(dir, "width_regressor.bson")
+            if isfile(width_path)
+                try
+                    width_model = loadqlnnmodelonce(width_path)
+                    break
+                catch err
+                    @warn "qlnn_fluctuation_spectra: failed to load width regressor; falling back to constant WIDTH" path=width_path err=err
+                    width_model = nothing
+                    break
+                end
+            end
+        end
+        if width_model === nothing
+            @warn "qlnn_fluctuation_spectra: no width_regressor.bson found in bundle dir; using constant WIDTH for WIDTH_SPECTRUM" bundle_name
+        elseif !_qlnn_width_uses_chained_eig(width_model)
+            @warn "qlnn_fluctuation_spectra: width regressor was not trained with chained eigenvalue inputs (no `cgyro_gamma`/`cgyro_omega` in xnames); falling back to constant WIDTH"
+            width_model = nothing
+        end
+    end
+    return qlnn_fluctuation_spectra(input_tjlfs, bundle;
+                                    width_model=width_model,
+                                    warn_nn_train_bounds=warn_nn_train_bounds,
+                                    stability_threshold=stability_threshold,
+                                    kx=kx, n_kx=n_kx, kx_max_sigma=kx_max_sigma)
+end
+
+function qlnn_fluctuation_spectra(input_tjlfs::Vector{TJLF.InputTJLF{T}},
+                                  bundle::QLNNbundle;
+                                  width_model::Union{Nothing,AbstractQLNNmodel} = nothing,
+                                  warn_nn_train_bounds::Bool = false,
+                                  stability_threshold::Real = 0.5,
+                                  kx::Union{Nothing,AbstractVector} = nothing,
+                                  n_kx::Int = 128,
+                                  kx_max_sigma::Real = 6.0) where {T<:Real}
+    nr = length(input_tjlfs)
+    if nr == 0
+        return NamedTuple[]
+    end
+
+    # Sanity: every InputTJLF must declare a SAT_RULE the kx-Lorentzian path
+    # supports and ALPHA_QUENCH=0 (matching `fluctuation_spectra`).
+    for (r, it) in enumerate(input_tjlfs)
+        @assert it.SAT_RULE in (1, 2, 3) "qlnn_fluctuation_spectra requires SAT_RULE ∈ {1,2,3} (got $(it.SAT_RULE) at r=$r)"
+        @assert it.ALPHA_QUENCH == 0.0 "qlnn_fluctuation_spectra requires ALPHA_QUENCH=0 (spectral-shift model; r=$r)"
+    end
+
+    # Phase 1-3: run NN forwards (mutates input_tjlfs: NMODES=1, KY_SPECTRUM).
+    pred = _run_qlnn_predict(input_tjlfs, bundle; warn_nn_train_bounds=warn_nn_train_bounds)
+
+    # Validate width regressor xnames if supplied.
+    width_uses_chained = width_model !== nothing && _qlnn_width_uses_chained_eig(width_model)
+
+    # Per-radial output containers.
+    fs_per_radial = Vector{TJLFFluctuationSpectra{T}}(undef, nr)
+    eig_per_radial = Vector{Array{T,3}}(undef, nr)
+
+    # Threading note: width-NN forward passes are run sequentially per radial
+    # point because they share the bundle's pooled chain (which is
+    # task-local). The remaining per-radial work (QL/Γ packing, intensity_sat,
+    # phi2 build) is independent and threaded.
+    width_predictions = Vector{Union{Nothing,Vector{T}}}(undef, nr)
+    if width_uses_chained
+        for r in 1:nr
+            c0 = pred.chunk_starts[r]
+            nk = pred.nky_r[r]
+            cols = c0:c0+nk-1
+            ks = pred.ky_spectrums[r]
+            γ_phys, ω_phys = _qlnn_recover_eig(view(pred.Y_eig, :, cols),
+                                               ks, pred.eig_norm_by_ky)
+            xs_w = Matrix{T}(undef, length(width_model.xnames), nk)
+            _qlnn_fill_xs_with_eig!(xs_w, input_tjlfs[r], ks,
+                                    width_model.xnames, γ_phys, ω_phys)
+            y_w = predict(width_model, xs_w)  # (1, nk) for the width head
+            # Width is positive; clamp tiny negative drift from NN extrapolation.
+            width_predictions[r] = T[max(T(y_w[1, j]), T(1e-3)) for j in 1:nk]
+        end
+    else
+        for r in 1:nr
+            width_predictions[r] = nothing
+        end
+    end
+
+    Threads.@threads for r in 1:nr
+        c0 = pred.chunk_starts[r]
+        nk = pred.nky_r[r]
+        cols = c0:c0+nk-1
+        ks = pred.ky_spectrums[r]
+        it = input_tjlfs[r]
+        sat_params = pred.sat_params_v[r]
+
+        # Optional stability gate (mirrors run_qlnn).
+        mask = nothing
+        if pred.P_unstable !== nothing
+            mask = Bool[pred.P_unstable[c0+j-1] >= stability_threshold for j in 1:nk]
+        end
+
+        # Build QL tensor (nf, ns, NMODES=1, nky, 5).
+        nf = pred.info_e.nf
+        ns = pred.info_e.ns
+        QL = zeros(T, nf, ns, 1, nk, 5)
+        _qlnn_pack_qlweight!(QL, view(pred.Y_energy,   :, cols),
+                             pred.info_e, _QLNN_TARGET_TYPE_IDX[:energy],   ks, mask)
+        _qlnn_pack_qlweight!(QL, view(pred.Y_particle, :, cols),
+                             pred.info_p, _QLNN_TARGET_TYPE_IDX[:particle], ks, mask)
+        _qlnn_pack_qlweight!(QL, view(pred.Y_momentum, :, cols),
+                             pred.info_m, _QLNN_TARGET_TYPE_IDX[:momentum], ks, mask)
+
+        # Recover physical (γ, ω) per ky.
+        γ_phys, ω_phys = _qlnn_recover_eig(view(pred.Y_eig, :, cols),
+                                           ks, pred.eig_norm_by_ky)
+
+        # Γ matrix for the saturation rule (1, nky), with stability mask applied.
+        Γ = zeros(T, 1, nk)
+        Tz = zero(T)
+        @inbounds for k in 1:nk
+            γ = γ_phys[k]
+            if mask !== nothing && !mask[k]
+                γ = Tz
+            end
+            Γ[1, k] = γ
+        end
+
+        # Populate WIDTH_SPECTRUM BEFORE intensity_sat — `xgrid_functions_geo`
+        # reads `inputs.WIDTH_SPECTRUM[ky_index]` while computing kx0_e.
+        if width_predictions[r] !== nothing
+            wpred = width_predictions[r]::Vector{T}
+            if it.WIDTH_SPECTRUM === missing || length(it.WIDTH_SPECTRUM) != nk
+                it.WIDTH_SPECTRUM = collect(T, wpred)
+            else
+                it.WIDTH_SPECTRUM .= wpred
+            end
+        else
+            # Constant-width fallback (TJLF's default behavior on a fresh InputTJLF).
+            if it.WIDTH_SPECTRUM === missing || length(it.WIDTH_SPECTRUM) != nk
+                it.WIDTH_SPECTRUM = fill(T(it.WIDTH), nk)
+            else
+                fill!(it.WIDTH_SPECTRUM, T(it.WIDTH))
+            end
+        end
+
+        sat_rule = it.SAT_RULE
+
+        # SAT2/SAT3 need zonal-mixing params from the first-pass gammas.
+        zonal_kwargs = if sat_rule in (2, 3)
+            most_unstable_gamma = Γ[1, :]
+            vzf, kymax, jmax = TJLF.get_zonal_mixing(it, sat_params, most_unstable_gamma)
+            (; vzf_out_param=vzf, kymax_out_param=kymax, jmax_out_param=jmax)
+        else
+            NamedTuple()
+        end
+
+        params = TJLF.intensity_sat(
+            it, sat_params, Γ, QL, T(2.0), true;
+            zonal_kwargs...
+        )
+
+        phinorm::Matrix{T}    = params.phinorm
+        kx_width::Vector{T}   = params.kx_width
+        kx0_e::Vector{T}      = params.kx0_e
+        ax::T                 = T(params.ax)
+        ay::T                 = T(params.ay)
+        exp_ax::Int           = Int(params.exp_ax)
+
+        ky_vec = collect(T, ks)
+        kx_vec, phi2 = _build_phi2_from_sat_params(phinorm, kx_width, kx0_e,
+                                                   ax, ay, exp_ax, ky_vec;
+                                                   kx=kx, n_kx=n_kx,
+                                                   kx_max_sigma=kx_max_sigma)
+
+        fs_per_radial[r] = TJLFFluctuationSpectra{T}(
+            kx_vec, ky_vec, phi2, copy(phinorm), kx_width, kx0_e,
+            ax, ay, exp_ax, sat_rule, nothing,
+        )
+
+        # (mode=1, ky, type=2): [:, :, 1]=γ, [:, :, 2]=ω. Matches what the
+        # synth diag reads from `tjlf_result.eigenvalue`.
+        eig_arr = zeros(T, 1, nk, 2)
+        @inbounds for k in 1:nk
+            eig_arr[1, k, 1] = γ_phys[k]
+            eig_arr[1, k, 2] = ω_phys[k]
+        end
+        eig_per_radial[r] = eig_arr
+    end
+
+    return [(; fs=fs_per_radial[r], eigenvalue=eig_per_radial[r]) for r in 1:nr]
+end
+
+# Single-input convenience wrappers.
+function qlnn_fluctuation_spectra(input_tjlf::TJLF.InputTJLF{T}; kw...) where {T<:Real}
+    return qlnn_fluctuation_spectra([input_tjlf]; kw...)[1]
+end
+
+function qlnn_fluctuation_spectra(input_tjlf::TJLF.InputTJLF{T}, bundle::QLNNbundle; kw...) where {T<:Real}
+    return qlnn_fluctuation_spectra([input_tjlf], bundle; kw...)[1]
+end
+
+function qlnn_fluctuation_spectra(input_tglf::TJLF.InputTGLF; kw...)
+    input_tjlf = TJLF.InputTJLF{Float64}(input_tglf)
+    return qlnn_fluctuation_spectra(input_tjlf; kw...)
+end
+
+function qlnn_fluctuation_spectra(input_tglfs::Vector{TJLF.InputTGLF{T}}; kw...) where {T<:Real}
+    input_tjlfs = TJLF.InputTJLF{T}[TJLF.InputTJLF{T}(it) for it in input_tglfs]
+    return qlnn_fluctuation_spectra(input_tjlfs; kw...)
+end
+
+# ----------------------------------------------------------------------------
+#  GPU-path stubs (implementations live in `ext/QLNN_CUDA_Ext.jl`)
+# ----------------------------------------------------------------------------
+#
+# Defined here so user code can write `TurbulentTransport.qlnn_to_gpu(...)`
+# without `using CUDA` first; the actual methods are added by the extension
+# the moment `using CUDA` happens (Julia 1.9+ Pkg-extension mechanism).
+"""
+    qlnn_to_gpu(model_or_bundle; ...)
+
+Move a `QLNNmodel`, `QLNNensemble`, or `QLNNbundle` to the active CUDA
+device. Implementation lives in the `QLNN_CUDA_Ext` extension; calling this
+without `CUDA` loaded raises a clear "extension not loaded" error.
+"""
+function qlnn_to_gpu end
+
+"""
+    qlnn_fluctuation_spectra_gpu(input_tjlfs, bundle_gpu; ...)
+
+GPU sibling of [`qlnn_fluctuation_spectra`](@ref). Runs NN forward passes
+on the active CUDA device and returns per-radial GPU-resident
+`phi_amp_d` / `ω_ky_d` / `kx_d` / `ky_d` arrays (plus a CPU mirror of
+`fs` and `eigenvalue` for compatibility with the synth-diag pipeline).
+
+Implementation lives in the `QLNN_CUDA_Ext` extension.
+"""
+function qlnn_fluctuation_spectra_gpu end
 
 # Single-input convenience wrapper (parallel to run_tglfnn).
 function run_qlnn(input_tjlf::TJLF.InputTJLF{T}; kw...) where {T<:Real}

@@ -29,6 +29,8 @@ jobs:
           - macos-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - uses: julia-actions/setup-julia@v2
         with:

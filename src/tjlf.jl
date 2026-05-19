@@ -296,6 +296,53 @@ end
     return 1 / (ay_term^2 * ax_term^2)
 end
 
+# Lorentzian-shaped reconstruction of `|φ|²(kx, ky, mode)` from the saturation-rule
+# output. Shared by `fluctuation_spectra` (TJLF path) and `qlnn_fluctuation_spectra`
+# (QLNN path) so both call sites apply the exact same `_sat_lorentz_shape` math.
+#
+# `phinorm`, `kx_width`, `kx0_e`, `ax`, `ay`, `exp_ax` come from
+# `TJLF.intensity_sat(... ; return_phi_params=true)`.
+function _build_phi2_from_sat_params(phinorm::AbstractMatrix{T},
+                                     kx_width::AbstractVector{T},
+                                     kx0_e::AbstractVector{T},
+                                     ax::T, ay::T, exp_ax::Int,
+                                     ky::AbstractVector{T};
+                                     kx::Union{Nothing,AbstractVector}=nothing,
+                                     n_kx::Int=128,
+                                     kx_max_sigma::Real=6.0) where {T<:Real}
+    nky = length(ky)
+    nmodes = size(phinorm, 2)
+    @assert size(phinorm, 1) == nky "_build_phi2_from_sat_params: phinorm rows ($(size(phinorm,1))) ≠ nky ($nky)"
+    @assert length(kx_width) == nky "_build_phi2_from_sat_params: kx_width length ≠ nky"
+    @assert length(kx0_e)    == nky "_build_phi2_from_sat_params: kx0_e length ≠ nky"
+
+    kx_vec::Vector{T} = if kx === nothing
+        lorentz_hw = ay > 0 ? kx_width ./ (ky .* sqrt(ay)) : kx_width ./ ky
+        kx_half = maximum(lorentz_hw) * T(kx_max_sigma) + maximum(abs.(kx0_e))
+        collect(T, range(-kx_half, kx_half; length=n_kx))
+    else
+        collect(T, kx)
+    end
+    nkx = length(kx_vec)
+
+    phi2 = zeros(T, nkx, nky, nmodes)
+    @inbounds for j in 1:nky
+        inv_w = ky[j] / kx_width[j]
+        u0 = -kx0_e[j] * inv_w
+        L0 = _sat_lorentz_shape(u0, ax, ay, exp_ax)
+        invL0 = L0 > 0 ? one(T) / L0 : one(T)
+        for m in 1:nmodes
+            pn = phinorm[j, m]
+            pn == 0 && continue
+            for i in 1:nkx
+                u = (kx_vec[i] - kx0_e[j]) * inv_w
+                phi2[i, j, m] = pn * _sat_lorentz_shape(u, ax, ay, exp_ax) * invL0
+            end
+        end
+    end
+    return kx_vec, phi2
+end
+
 """
     fluctuation_spectra(tjlf_result::NamedTuple, input_tjlf::InputTJLF; kw...) -> TJLFFluctuationSpectra
     fluctuation_spectra(input_tjlf::InputTJLF; kw...)
@@ -367,30 +414,10 @@ function fluctuation_spectra(
     nky = length(ky)
     nmodes = size(phinorm, 2)
 
-    kx_vec::Vector{T} = if kx === nothing
-        lorentz_hw = ay > 0 ? kx_width ./ (ky .* sqrt(ay)) : kx_width ./ ky
-        kx_half = maximum(lorentz_hw) * T(kx_max_sigma) + maximum(abs.(kx0_e))
-        collect(T, range(-kx_half, kx_half; length=n_kx))
-    else
-        collect(T, kx)
-    end
-    nkx = length(kx_vec)
-
-    phi2 = zeros(T, nkx, nky, nmodes)
-    @inbounds for j in 1:nky
-        inv_w = ky[j] / kx_width[j]
-        u0 = -kx0_e[j] * inv_w
-        L0 = _sat_lorentz_shape(u0, ax, ay, exp_ax)
-        invL0 = L0 > 0 ? one(T) / L0 : one(T)
-        for m in 1:nmodes
-            pn = phinorm[j, m]
-            pn == 0 && continue
-            for i in 1:nkx
-                u = (kx_vec[i] - kx0_e[j]) * inv_w
-                phi2[i, j, m] = pn * _sat_lorentz_shape(u, ax, ay, exp_ax) * invL0
-            end
-        end
-    end
+    kx_vec, phi2 = _build_phi2_from_sat_params(phinorm, kx_width, kx0_e,
+                                               ax, ay, exp_ax, ky;
+                                               kx=kx, n_kx=n_kx,
+                                               kx_max_sigma=kx_max_sigma)
 
     density2 = _density_spectrum_from_weights(density_weights, phi2, nmodes, nky, T)
 
