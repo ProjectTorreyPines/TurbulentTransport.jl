@@ -56,7 +56,7 @@ else
             @test size(eig_q)     == (1, nky_q, 2)
             @test length(fs_q.kx_width) == nky_q
             @test length(fs_q.kx0_e)    == nky_q
-            @test size(fs_q.phinorm)    == (nky_q, 1)
+            @test size(fs_q.phi2_ky)    == (nky_q, 1)
         end
 
         @testset "finiteness" begin
@@ -67,7 +67,7 @@ else
             @test all(isfinite, eig_q)
             @test all(isfinite, fs_q.kx_width)
             @test all(>(0), fs_q.kx_width)     # widths must be positive
-            @test all(isfinite, fs_q.phinorm)
+            @test all(isfinite, fs_q.phi2_ky)
         end
 
         @testset "ky grid matches the TJLF path" begin
@@ -78,8 +78,8 @@ else
                                                           n_kx=33, kx_max_sigma=2.5)
             @test length(fs_t.ky) == nky_q
             @test fs_t.ky ≈ fs_q.ky atol=1e-10
-            # `phi2` shapes match — only the magnitudes differ (NN vs solver).
-            @test size(fs_t.phi2) == size(fs_q.phi2)
+            # kx/ky dimensions match; mode count may differ (QLNN=1, TJLF≥1).
+            @test size(fs_t.phi2)[1:2] == size(fs_q.phi2)[1:2]
             # SAT_RULE flows through the saturation rule; QLNN uses the same
             # `intensity_sat`, so the recorded sat_rule must match.
             @test fs_t.sat_rule == fs_q.sat_rule
