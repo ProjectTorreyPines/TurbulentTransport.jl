@@ -1,6 +1,6 @@
 # ONNX to PyTorch and using models in Fortran
 
-The script `convert_nn_onnx_to_pytorch_trace.py` takes multiple ONNX model files and combines them into a single PyTorch traced model, saving the model to `committee.pt`. The combined model is scaled according to `xm.txt`, `xsigma.txt`, `ym.txt` and `ysigma.txt`, so that the inputs and outputs correspond to those used in TGLF. The model file `committee.pt` can then be used in PyTorch, or in Fortran via [FTorch](https://github.com/Cambridge-ICCS/FTorch). 
+The script `convert_nn_onnx_to_pytorch_trace.py` takes multiple ONNX model files and combines them into a single PyTorch traced model, saving the model to `committee.pt`. The combined model is scaled according to `xm.txt`, `xsigma.txt`, `ym.txt` and `ysigma.txt`, so that the inputs and outputs correspond to those used in TGLF. The model file `committee.pt` can then be used in PyTorch, or in Fortran via [FTorch](https://github.com/Cambridge-ICCS/FTorch).
 
 The traced model requires 1 input array that contains the inputs as in `xnames.txt` (model dependent length) and outputs 2 arrays (prediction and variance) of length 4, corresponding to the names in `ynames.txt`.
 
@@ -10,6 +10,8 @@ The `convert_nn_onnx_to_pytorch_trace.py` script combines all `.onnx` files in t
 ```bash
 python ../../utilities/convert_nn_onnx_to_pytorch_trace.py
 ```
+
+For residual models (e.g. `models/sat3_em_d3d+mastu+nstx_azf-1_gknn31/`) it is necessary to first run the script in the parent model directory since the parent `committee.pt` is required in conversion.
 
 ### Prerequisites
 
