@@ -166,5 +166,17 @@ import Flux
         # Nonexistent model throws
         @test_throws ErrorException TurbulentTransport.resolve_model_path("nonexistent_zzz")
     end
+
+    @testset "Git LFS pointer detection" begin
+        mktempdir() do tmpdir
+            pointer = joinpath(tmpdir, "pointer.bson")
+            write(pointer, "version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 1\n")
+            real = joinpath(tmpdir, "real.bson")
+            write(real, 0x01)
+
+            @test TurbulentTransport.is_lfs_pointer(pointer)
+            @test !TurbulentTransport.is_lfs_pointer(real)
+        end
+    end
 end
 
