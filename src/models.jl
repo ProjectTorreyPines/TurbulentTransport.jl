@@ -3,9 +3,10 @@
 #= ======================== =#
 
 using Downloads
+using SHA
 
 const _MODEL_SEARCH_PATHS = String[]  # Additional search paths from providers
-const _LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/v1"
+const _LFS_POINTER_PREFIX = "version https://git-lfs.github.com/spec/v1"
 const _LFS_REPO = "ProjectTorreyPines/TurbulentTransport.jl"
 const _model_download_lock = ReentrantLock()
 
@@ -22,85 +23,132 @@ function is_lfs_pointer(path::AbstractString)
     isfile(path) || return false
     sz = filesize(path)
     sz > 500 && return false
-    prefix_len = min(sz, length(_LFS_POINTER_PREFIX))
-    bytes = read(path, prefix_len)
-    return startswith(bytes, _LFS_POINTER_PREFIX)
+    sz >= sizeof(_LFS_POINTER_PREFIX) || return false
+    bytes = read(path, sizeof(_LFS_POINTER_PREFIX))
+    return String(bytes) == _LFS_POINTER_PREFIX
 end
 
-function _models_git_ref()
+# Parse a Git LFS pointer file. Returns `(oid, size)` or `nothing` if the file
+# is not a recognizable pointer. `oid` is the lowercase SHA-256 hex string of
+# the real content; `size` is the expected byte length.
+function _lfs_pointer_info(path::AbstractString)
+    is_lfs_pointer(path) || return nothing
+    content = read(path, String)
+    oid_match = match(r"oid sha256:([0-9a-fA-F]{64})"i, content)
+    size_match = match(r"size (\d+)"i, content)
+    (oid_match === nothing || size_match === nothing) && return nothing
+    return (oid=lowercase(oid_match.captures[1]), size=parse(Int, size_match.captures[1]))
+end
+
+# SHA-256 of a file as lowercase hex (matches Git LFS `oid sha256:` format).
+function _sha256_of_file(path::AbstractString)
+    return open(path) do io
+        bytes2hex(SHA.sha256(io))
+    end
+end
+
+# Ordered list of GitHub refs (commit / tag / branch) to try when fetching LFS
+# content via `media.githubusercontent.com`. The eventual SHA-256 check guards
+# against any of these serving wrong bytes, so the order is just "most likely
+# to match first".
+function _candidate_refs()
+    refs = String[]
     if haskey(ENV, "TURBULENTTRANSPORT_MODELS_REF")
         ref = strip(ENV["TURBULENTTRANSPORT_MODELS_REF"])
-        !isempty(ref) && return ref
+        !isempty(ref) && push!(refs, ref)
     end
-    ref_file = joinpath(_pkg_root(), "models", "MODELS_REF")
-    if isfile(ref_file)
-        ref = strip(read(ref_file, String))
-        !isempty(ref) && return ref
-    end
-    if isdir(joinpath(_pkg_root(), ".git"))
+    root = _pkg_root()
+    if isdir(joinpath(root, ".git"))
         try
-            return readchomp(`git -C $( _pkg_root()) rev-parse HEAD`)
+            push!(refs, readchomp(`git -C $root rev-parse HEAD`))
         catch
         end
     end
     try
-        return "v$(pkgversion(@__MODULE__))"
+        ver = pkgversion(@__MODULE__)
+        ver === nothing || push!(refs, "v$ver")
     catch
     end
-    return "master"
+    push!(refs, "master")
+    push!(refs, "main")
+    return unique!(refs)
 end
 
-function _lfs_media_url(relpath::AbstractString)
-    ref = _models_git_ref()
+# Per-process URL builder override, used only by the test suite to point at a
+# local `file://` fixture instead of `media.githubusercontent.com`. In normal
+# use this stays `nothing` and we hit GitHub.
+const _LFS_URL_OVERRIDE = Ref{Union{Nothing,Function}}(nothing)
+
+function _lfs_media_url(ref::AbstractString, relpath::AbstractString)
+    override = _LFS_URL_OVERRIDE[]
+    override === nothing || return override(ref, relpath)
     return "https://media.githubusercontent.com/media/$(_LFS_REPO)/$(ref)/$(relpath)"
 end
 
 """
     ensure_model_file!(path::AbstractString) -> path
 
-Materialize a model file when the on-disk copy is a Git LFS pointer. Pkg checkouts
-do not run `git lfs pull`, so CI and fresh installs need this fallback.
+If `path` is a Git LFS pointer stub (Pkg installs don't run `git lfs pull`),
+transparently materialize the real model bytes in place so callers see the
+same `path` they would have seen with a full LFS-aware checkout.
+
+The Git LFS pointer's `oid sha256:...` is the source of truth: every download
+candidate is accepted only if its SHA-256 matches the pointer's oid, so a
+ref that drifts ahead/behind the installed package cannot silently swap in
+the wrong weights.
 """
 function ensure_model_file!(path::AbstractString)
     isfile(path) || return path
     is_lfs_pointer(path) || return path
 
     lock(_model_download_lock) do
+        # Re-check under the lock: another task may have materialized it.
         is_lfs_pointer(path) || return path
 
-        root = _pkg_root()
-        relpath = relpath(path, root)
+        spec = _lfs_pointer_info(path)
+        spec === nothing && error("Malformed Git LFS pointer at '$path'")
 
+        root = _pkg_root()
+        rel = relpath(path, root)
+
+        # 1) In a dev checkout, prefer `git lfs pull` — it uses the oid
+        #    internally and bypasses any ref guessing.
         if isdir(joinpath(root, ".git"))
             try
-                run(setenv(`git -C $root lfs pull --include $relpath`; stderr=devnull))
-                is_lfs_pointer(path) || return path
+                run(setenv(`git -C $root lfs pull --include $rel`; stderr=devnull, stdin=devnull))
+                if !is_lfs_pointer(path) && _sha256_of_file(path) == spec.oid
+                    return path
+                end
             catch
             end
         end
 
-        url = _lfs_media_url(relpath)
+        # 2) Fall back to `media.githubusercontent.com`, trying refs in order
+        #    and accepting only the one whose bytes hash to the pointer's oid.
+        attempted = String[]
         tmp = path * ".download"
-        try
-            Downloads.download(url, tmp)
-            if !isfile(tmp) || filesize(tmp) < 500 || is_lfs_pointer(tmp)
-                rm(tmp; force=true)
-                error(
-                    "Model file '$(relpath)' is a Git LFS pointer and could not be downloaded " *
-                    "from $(url). Set TURBULENTTRANSPORT_MODELS_REF to a valid commit/tag, or run " *
-                    "`git lfs pull` in a full TurbulentTransport checkout."
-                )
+        for ref in _candidate_refs()
+            url = _lfs_media_url(ref, rel)
+            push!(attempted, ref)
+            try
+                Downloads.download(url, tmp)
+                if isfile(tmp) && filesize(tmp) == spec.size &&
+                   !is_lfs_pointer(tmp) && _sha256_of_file(tmp) == spec.oid
+                    mv(tmp, path; force=true)
+                    return path
+                end
+            catch
             end
-            mv(tmp, path; force=true)
-        catch err
             rm(tmp; force=true)
-            if err isa ErrorException && occursin("Git LFS pointer", err.msg)
-                rethrow()
-            end
-            error(
-                "Model file '$(relpath)' is a Git LFS pointer and download failed from $(url): $(sprint(showerror, err))"
-            )
         end
+
+        error(
+            "Could not materialize Git LFS model '$rel' " *
+            "(oid sha256:$(spec.oid), size $(spec.size)). " *
+            "Tried refs: $(join(attempted, ", ")). " *
+            "Check network access to media.githubusercontent.com, or run " *
+            "`git lfs pull` in a TurbulentTransport dev checkout."
+        )
     end
 
     return path
