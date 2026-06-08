@@ -27,11 +27,16 @@ include("modeID.jl")
 
 include("cgyro.jl")
 
+include("slurm_utils.jl")
+
 include("qlgyro.jl")
 
 include("utils.jl")
 
+include("tglf_ep.jl")
+
 export InputTGLF, InputTJLF, available_models, available_qlnn_bundles, model_selector
+export InputTGLFEP, run_tjlfep
 export run_qlnn, qlnn_fluctuation_spectra, loadqlnnbundle, loadqlnnmodel
 export QLNNmodel, QLNNensemble, QLNNbundle
 export qlnn_to_gpu, qlnn_fluctuation_spectra_gpu
