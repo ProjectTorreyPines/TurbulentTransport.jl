@@ -597,36 +597,7 @@ function check_cgyro_convergence(rundir::String)
     return :running
 end
 
-"""
-    check_slurm_status(job_id::String) -> Symbol
-
-Check if a Slurm job is still in queue/running.
-Returns :pending, :running, :completed, or :unknown.
-"""
-function check_slurm_status(job_id::String)
-    if isempty(job_id)
-        return :unknown
-    end
-    try
-        output = strip(read(`sacct -j $job_id --format=State --noheader -P`, String))
-        lines = filter(!isempty, split(output, '\n'))
-        if isempty(lines)
-            return :unknown
-        end
-        state = strip(lines[1])
-        if state == "PENDING"
-            return :pending
-        elseif state == "RUNNING"
-            return :running
-        elseif state in ("COMPLETED", "FAILED", "TIMEOUT", "CANCELLED")
-            return :completed
-        else
-            return :unknown
-        end
-    catch
-        return :unknown
-    end
-end
+# check_slurm_status is provided by slurm_utils.jl (included before this file).
 
 """
     submit_cgyro_job(rundir::String; gpu::Bool=true, n_mpi::Int=32, n_omp::Int=4, walltime::String="00:15:00", repo::String="m3739_g") -> String
