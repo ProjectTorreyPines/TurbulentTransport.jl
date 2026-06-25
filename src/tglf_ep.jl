@@ -625,6 +625,10 @@ export SCAN_N="@SCAN_N@"
 export N_BASIS="@N_BASIS@"
 export NGRID="@NGRID@"
 export ALPHA_SOLVER="@ALPHA_SOLVER@"
+export SOLVER="@SOLVER@"
+export AD_EXTEND_MODE="@EXTEND_MODE@"
+export AD_WIDE_KDESC="@WIDE_KDESC@"
+export AD_FAITHFUL_CONFIRM="@FAITHFUL_CONFIRM@"
 export INNER="@INNER@"
 export MPS_TEAM="@MPS_TEAM@"
 export TJLFEP_OUT_DIR="@BASEDIR@"
@@ -648,7 +652,7 @@ fi
 
 cd "${TJLFEP_ROOT}/build"
 echo "=== run_tjlfep case=${CASE} job=${SLURM_JOB_ID} nodes=${SLURM_NNODES} tasks=${SLURM_NTASKS} ==="
-echo "N_BASIS=${N_BASIS} SCAN_N=${SCAN_N} NGRID=${NGRID} ALPHA_SOLVER=${ALPHA_SOLVER} INNER=${INNER} MPS_TEAM=${MPS_TEAM}"
+echo "N_BASIS=${N_BASIS} SCAN_N=${SCAN_N} NGRID=${NGRID} ALPHA_SOLVER=${ALPHA_SOLVER} SOLVER=${SOLVER} EXTEND_MODE=${AD_EXTEND_MODE} WIDE_KDESC=${AD_WIDE_KDESC} FAITHFUL_CONFIRM=${AD_FAITHFUL_CONFIRM} INNER=${INNER} MPS_TEAM=${MPS_TEAM}"
 nvidia-smi -L 2>/dev/null | head -4 || true
 
 SYSFLAG=""
@@ -706,6 +710,10 @@ export SCAN_N="@SCAN_N@"
 export N_BASIS="@N_BASIS@"
 export NGRID="@NGRID@"
 export ALPHA_SOLVER="@ALPHA_SOLVER@"
+export SOLVER="@SOLVER@"
+export AD_EXTEND_MODE="@EXTEND_MODE@"
+export AD_WIDE_KDESC="@WIDE_KDESC@"
+export AD_FAITHFUL_CONFIRM="@FAITHFUL_CONFIRM@"
 export INNER="@INNER@"
 export MPS_TEAM="@MPS_TEAM@"
 export TJLFEP_OUT_DIR="@BASEDIR@"
@@ -716,7 +724,7 @@ export TJLFEP_GPU_SYSIMAGE="@SYSIMAGE@"
 
 cd "${TJLFEP_ROOT}/build"
 echo "=== run_tjlfep SPMD case=${CASE} job=${SLURM_JOB_ID} nodes=${SLURM_NNODES} tasks=${SLURM_NTASKS} ==="
-echo "N_BASIS=${N_BASIS} SCAN_N=${SCAN_N} NGRID=${NGRID} ALPHA_SOLVER=${ALPHA_SOLVER} INNER=${INNER} MPS_TEAM=${MPS_TEAM}"
+echo "N_BASIS=${N_BASIS} SCAN_N=${SCAN_N} NGRID=${NGRID} ALPHA_SOLVER=${ALPHA_SOLVER} SOLVER=${SOLVER} EXTEND_MODE=${AD_EXTEND_MODE} WIDE_KDESC=${AD_WIDE_KDESC} FAITHFUL_CONFIRM=${AD_FAITHFUL_CONFIRM} INNER=${INNER} MPS_TEAM=${MPS_TEAM}"
 nvidia-smi -L 2>/dev/null | head -4 || true
 
 SYSFLAG=""
@@ -757,6 +765,13 @@ stability scan for `case` on the 5-node / 20-GPU layout, then return a
 
 Keyword arguments (defaults reproduce the validated 5N/20-GPU premium/1h layout):
 - `n_scan=20, n_basis=32, ngrid=201, gpu=true, alpha_solver=:stiff, nodes=5`
+- `solver=:ad` (critical-factor engine, matches the `ActorTJLFEP` production default;
+  `:grid` for Fortran-equivalence, `:robust_ad` for the most accurate AD path, `:truth`
+  for the narrow-width EP-driven onset). `extend_mode=:locate` (`:wide` for the fast
+  single-pass width-aware mode), `wide_kdesc=2` (`:wide` multistart breadth),
+  `faithful_confirm=true`. Each defaults from its env var (`SOLVER`, `AD_EXTEND_MODE`,
+  `AD_WIDE_KDESC`, `AD_FAITHFUL_CONFIRM`) so a preset shell env is honored; the rendered
+  batch script then re-exports them so the scan/SPMD-task scripts pick them up.
 - `inner=:threads` (proven 1-radius-per-GPU baseline, single-master + `pmap` topology) or
   `:mps_team` with `mps_team=8`. `:mps_team` renders the **SPMD layout** (the verified DIII-D
   gacode path): a 3-phase job — phase 1 builds the dd once, phase 2 is `srun -n n_scan` through
@@ -782,6 +797,10 @@ function run_tjlfep(case::Symbol=:ITER;
     ngrid::Int=201,
     gpu::Bool=true,
     alpha_solver::Symbol=:stiff,
+    solver::Symbol=Symbol(get(ENV, "SOLVER", "ad")),
+    extend_mode::Symbol=Symbol(get(ENV, "AD_EXTEND_MODE", "locate")),
+    wide_kdesc::Int=parse(Int, get(ENV, "AD_WIDE_KDESC", "2")),
+    faithful_confirm::Bool=get(ENV, "AD_FAITHFUL_CONFIRM", "1") != "0",
     nodes::Int=5,
     inner::Symbol=:threads,
     mps_team::Int=8,
@@ -852,6 +871,10 @@ function run_tjlfep(case::Symbol=:ITER;
         "@N_BASIS@" => string(n_basis),
         "@NGRID@" => string(ngrid),
         "@ALPHA_SOLVER@" => string(alpha_solver),
+        "@SOLVER@" => string(solver),
+        "@EXTEND_MODE@" => string(extend_mode),
+        "@WIDE_KDESC@" => string(wide_kdesc),
+        "@FAITHFUL_CONFIRM@" => faithful_confirm ? "1" : "0",
         "@INNER@" => string(inner),
         "@MPS_TEAM@" => string(mps_team),
         "@WORKER_THREADS@" => string(worker_threads),
@@ -867,7 +890,7 @@ function run_tjlfep(case::Symbol=:ITER;
               `sbatch --dependency=afterok:$build_job_id $batchfile`
         out = read(cmd, String)
         job_id = parse_slurm_jobid(out)
-        @info "run_tjlfep: submitted scan" job_id case nodes n_scan n_basis inner basedir
+        @info "run_tjlfep: submitted scan" job_id case nodes n_scan n_basis solver extend_mode inner basedir
     else
         @info "run_tjlfep: rendered batch script (submit=false)" batchfile
     end
