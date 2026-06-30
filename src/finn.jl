@@ -67,6 +67,14 @@ function _dict2finn_ensemble(dict::Dict)
     return FINNensemble([_dict2finn(modict) for modict in values(dict)])
 end
 
+"""
+    load_finn_model(filename::AbstractString) -> FINNmodel | FINNensemble
+
+Load a FINN model from a `.bson` file. `filename` is resolved against the
+registered model search paths and the built-in `models/` directory (see
+[`run_finn`](@ref)). Returns a `FINNensemble` when the saved dictionary uses
+integer keys (one entry per ensemble member), otherwise a single `FINNmodel`.
+"""
 function load_finn_model(filename::AbstractString)
     fullpath = resolve_model_path(filename; extensions=[".bson"])
     savedict = BSON.load(fullpath, @__MODULE__)

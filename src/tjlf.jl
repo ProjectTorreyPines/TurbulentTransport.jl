@@ -7,7 +7,26 @@ Colors follow the convention: ITG=green, TEM=orange, KBM=violet, ETG=blue, MTM=r
 """
 @enum TurbulenceMode ITG TEM KBM ETG MTM
 
+@doc "Ion Temperature Gradient (ITG) mode: ion-scale, electrostatic, ion-direction frequency." ITG
+@doc "Trapped Electron Mode (TEM): ion-scale, electrostatic, electron-direction frequency." TEM
+@doc "Kinetic Ballooning Mode (KBM): electromagnetic, ion-direction frequency." KBM
+@doc "Electron Temperature Gradient (ETG) mode: electron-scale (high ky), electrostatic." ETG
+@doc "Micro-Tearing Mode (MTM): electromagnetic, electron-direction frequency." MTM
+
+"""
+    MODE_COLORS::Dict{TurbulenceMode,Symbol}
+
+Plot color associated with each [`TurbulenceMode`](@ref):
+ITG=green, TEM=orange, KBM=violet, ETG=blue, MTM=red.
+"""
 const MODE_COLORS = Dict(ITG => :green, TEM => :orange, KBM => :violet, ETG => :blue, MTM => :red)
+
+"""
+    MODE_LABELS::Dict{TurbulenceMode,String}
+
+Short string label (`"ITG"`, `"TEM"`, ...) for each [`TurbulenceMode`](@ref),
+used in plots and printed summaries.
+"""
 const MODE_LABELS = Dict(ITG => "ITG", TEM => "TEM", KBM => "KBM", ETG => "ETG", MTM => "MTM")
 
 """

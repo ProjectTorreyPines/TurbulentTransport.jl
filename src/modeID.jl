@@ -61,6 +61,15 @@ function _dict2modeid_ensemble(dict::Dict)
     return ModeIDensemble([_dict2modeid(modict) for modict in values(dict)])
 end
 
+"""
+    load_modeid_model(filename::AbstractString) -> ModeIDmodel | ModeIDensemble
+
+Load a ModeID turbulence-mode classifier from a `.bson` file. `filename` is
+resolved against the registered model search paths and the built-in `models/`
+directory (see [`run_modeid_nn`](@ref)). Returns a `ModeIDensemble` when the
+saved dictionary uses integer keys (one entry per ensemble member), otherwise a
+single `ModeIDmodel`.
+"""
 function load_modeid_model(filename::AbstractString)
     fullpath = resolve_model_path(filename; extensions=[".bson"])
     savedict = BSON.load(fullpath, @__MODULE__)

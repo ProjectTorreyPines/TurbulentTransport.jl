@@ -929,6 +929,23 @@ end
     return Y
 end
 
+"""
+    run_tglfnn_onnx(input_tglfs, onnx_path, xnames, ynames; intra_threads=1, inter_threads=1)
+
+Run a TGLF-NN model exported to ONNX through ONNXRuntime, as an alternative to
+the BSON/Flux path of [`run_tglfnn`](@ref).
+
+`onnx_path` is resolved against the registered model search paths and the
+built-in `models/` directory; `xnames`/`ynames` are the model's input/output
+feature names (a trailing `_log10` on an `xname` triggers a `log10` transform of
+that feature). `intra_threads`/`inter_threads` control the ONNXRuntime session
+thread pools (sessions are cached and reused).
+
+Three input forms are supported and dispatch to matching output shapes:
+- a single `InputTGLF` -> a `Vector` of the (reordered) output fluxes,
+- a `Vector{InputTGLF}` -> a `Vector{GACODE.FluxSolution}` (one per radius),
+- a `Dict` of feature-name => vector -> a `Dict` of output-name => vector.
+"""
 function run_tglfnn_onnx(input_tglfs::AbstractVector{TJLF.InputTGLF{T}},
                          onnx_path::String,
                          xnames::Vector{String},
