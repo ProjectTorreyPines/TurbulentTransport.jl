@@ -14,11 +14,6 @@ If you are new here, the fastest way to get oriented is the
 [example notebooks](#examples-and-tutorials) below — start with
 [`examples/run_TGLFNN.ipynb`](https://github.com/ProjectTorreyPines/TurbulentTransport.jl/blob/master/examples/run_TGLFNN.ipynb).
 
-## Online documentation
-For the full model list and API reference, see the [online documentation](https://projecttorreypines.github.io/TurbulentTransport.jl/dev).
-
-![Docs](https://github.com/ProjectTorreyPines/TurbulentTransport.jl/actions/workflows/make_docs.yml/badge.svg)
-
 ## Quick start
 
 Add the package (it lives in the ProjectTorreyPines registry):
@@ -75,8 +70,6 @@ repository), which exercise these models end-to-end:
 
 - [`fluxmatcher.ipynb`](https://github.com/ProjectTorreyPines/FuseExamples/blob/master/fluxmatcher.ipynb)
   — the canonical flux-matcher tutorial driving TGLF-NN / QLNN.
-- [`synthetic_diag/synthetic_diag.ipynb`](https://github.com/ProjectTorreyPines/FuseExamples/blob/master/synthetic_diag/synthetic_diag.ipynb)
-  — uses QLNN fluctuation-spectra reconstruction.
 - [`study_TGLFdb.ipynb`](https://github.com/ProjectTorreyPines/FuseExamples/blob/master/study_TGLFdb.ipynb)
   and [`study_database_generator.ipynb`](https://github.com/ProjectTorreyPines/FuseExamples/blob/master/study_database_generator.ipynb)
   — TGLF database generation and analysis.
@@ -135,8 +128,7 @@ include `d3d`, `mastu`, `nstx`, `ukstep`, `iter`, `fpp`/`stfpp`, multi-machine c
 triangularity). Suffixes such as `gknn*`, `tglfnn24` denote correction/companion models.
 
 List what is installed with `available_models()` (TGLF-NN / GKNN model files) and
-`available_qlnn_bundles()` (QLNN bundle directories), or browse the full model
-list in the [online documentation](https://projecttorreypines.github.io/TurbulentTransport.jl/dev).
+`available_qlnn_bundles()` (QLNN bundle directories).
 
 ### Picking a model with `model_selector`
 
