@@ -13,6 +13,8 @@ it plugs straight into FUSE and related ProjectTorreyPines tools.
 If you are new here, the fastest way to get oriented is the
 [example notebooks](#examples-and-tutorials) below — start with
 [`examples/run_TGLFNN.ipynb`](https://github.com/ProjectTorreyPines/TurbulentTransport.jl/blob/master/examples/run_TGLFNN.ipynb).
+For the full model list and API reference, see the
+[online documentation](https://projecttorreypines.github.io/TurbulentTransport.jl/dev).
 
 ## Quick start
 
