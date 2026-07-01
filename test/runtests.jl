@@ -34,4 +34,8 @@ else
     include("test_qlgyro.jl")
     include("test_qlnn.jl")
     include("test_qlnn_fluctuation_spectra.jl")
+    include("test_tglf.jl")
+    include("test_tjlf_modes.jl")
+    include("test_slurm_utils.jl")
+    include("test_tglf_ep.jl")
 end
