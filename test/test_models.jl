@@ -207,6 +207,24 @@ import SHA
         end
     end
 
+    @testset "_lfs_media_url default (GitHub) vs override" begin
+        old = TurbulentTransport._LFS_URL_OVERRIDE[]
+        try
+            # With no override, builds the media.githubusercontent.com LFS URL.
+            TurbulentTransport._LFS_URL_OVERRIDE[] = nothing
+            url = TurbulentTransport._lfs_media_url("abc123", "models/foo/bar.pt")
+            @test occursin("media.githubusercontent.com", url)
+            @test occursin("ProjectTorreyPines/TurbulentTransport.jl", url)
+            @test endswith(url, "abc123/models/foo/bar.pt")
+
+            # With an override installed, it is used verbatim instead.
+            TurbulentTransport._LFS_URL_OVERRIDE[] = (ref, rel) -> "file:///$(ref)/$(rel)"
+            @test TurbulentTransport._lfs_media_url("r", "p") == "file:///r/p"
+        finally
+            TurbulentTransport._LFS_URL_OVERRIDE[] = old
+        end
+    end
+
     @testset "ensure_model_file! materializes via SHA-verified override" begin
         # Use a `file://` URL override so the test is hermetic (no network).
         # Two refs are exposed: "bad_ref" serves wrong bytes, "good_ref" serves

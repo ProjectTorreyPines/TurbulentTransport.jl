@@ -125,4 +125,52 @@
             @test TurbulentTransport.load_tjlfep_results(state) === nothing
         end
     end
+
+    @testset "state pollers on a submitted run (fake sacct)" begin
+        mktempdir() do tmp
+            state = run_tjlfep(:ITER; submit=false, gpu=false, basedir=tmp)
+            state.job_id = "12345"  # pretend it was submitted
+
+            # A resolvable %j log file next to the run gets picked up on refresh.
+            logfile = joinpath(tmp, "tjlfep_12345.out")
+            write(logfile, "some log line\nTIMING_RESULT phase=total_job seconds=42\n")
+
+            with_fake_sacct("COMPLETED") do
+                refreshed = TurbulentTransport.refresh_tjlfep!(state)
+                @test refreshed === state
+                @test state.status == :completed
+                @test state.logfile == logfile
+            end
+            # refresh persisted the updated state.
+            @test isfile(joinpath(tmp, ".tjlfep_state.jls"))
+
+            # A finished job with a TIMING_RESULT/total_job line appends timing.
+            status_str = TurbulentTransport.tjlfep_status(state)
+            @test occursin("[completed]", status_str)
+            @test occursin("TIMING_RESULT", status_str)
+            @test occursin("phase=total_job", status_str)
+
+            # Results loader returns the serialized NamedTuple plus dd_json path.
+            results = (rho_scan=[0.5, 0.6], SFmin=[1.0, 2.0], width=[0.3, 0.4],
+                       kymark=[0.1, 0.2], n_EP=[1.0], p_EP=[2.0])
+            TurbulentTransport.save_state(results, joinpath(tmp, "tjlfep_results.jls"))
+            write(joinpath(tmp, "dd_out.json"), "{}")
+
+            loaded = TurbulentTransport.load_tjlfep_results(state)
+            @test loaded.rho_scan == results.rho_scan
+            @test loaded.SFmin == results.SFmin
+            @test loaded.dd_json == joinpath(tmp, "dd_out.json")
+        end
+    end
+
+    @testset "refresh_tjlfep! failed job (fake sacct)" begin
+        mktempdir() do tmp
+            state = run_tjlfep(:D3D; submit=false, gpu=false, basedir=tmp)
+            state.job_id = "99999"
+            with_fake_sacct("FAILED") do
+                TurbulentTransport.refresh_tjlfep!(state)
+                @test state.status == :failed
+            end
+        end
+    end
 end

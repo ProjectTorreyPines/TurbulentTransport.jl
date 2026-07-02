@@ -38,6 +38,24 @@ function load_sample_input()
     TurbulentTransport.load(InputTGLF(), SAMPLE_INPUT_PATH)
 end
 
+# Run `f()` with a throwaway `sacct` shim on PATH so the SLURM-polling helpers
+# can be exercised without a real scheduler. The emitted job State is `state`;
+# pass "__FAIL__" to make the shim exit non-zero (exercising the catch path).
+function with_fake_sacct(f, state::AbstractString)
+    mktempdir() do bin
+        shim = joinpath(bin, "sacct")
+        open(shim, "w") do io
+            println(io, "#!/usr/bin/env bash")
+            println(io, "if [ \"\$FAKE_SACCT_STATE\" = \"__FAIL__\" ]; then exit 1; fi")
+            println(io, "printf '%s\\n' \"\$FAKE_SACCT_STATE\"")
+        end
+        chmod(shim, 0o755)
+        withenv("PATH" => bin * ":" * get(ENV, "PATH", ""), "FAKE_SACCT_STATE" => state) do
+            f()
+        end
+    end
+end
+
 # Helper function to generate valid test input for a model
 # The model's xbounds are in the TRANSFORMED space (after log10 for _log10 fields)
 # but flux_array expects ORIGINAL values (before log10)

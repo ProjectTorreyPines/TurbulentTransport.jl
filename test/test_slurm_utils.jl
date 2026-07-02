@@ -17,6 +17,35 @@
         @test TurbulentTransport.check_slurm_status("") == :unknown
     end
 
+    @testset "check_slurm_status state mapping (fake sacct)" begin
+        # Map every documented sacct State to the driver's status symbol using a
+        # fake `sacct` on PATH, so no real scheduler is required.
+        for (state, expected) in (
+            ("PENDING", :pending),
+            ("RUNNING", :running),
+            ("CONFIGURING", :running),
+            ("COMPLETING", :running),
+            ("COMPLETED", :completed),
+            ("FAILED", :failed),
+            ("TIMEOUT", :failed),
+            ("CANCELLED", :failed),
+            ("NODE_FAIL", :failed),
+            ("OUT_OF_MEMORY", :failed),
+            ("CANCELLED by 12345", :failed),  # startswith("CANCELLED") branch
+            ("SOME_NEW_STATE", :unknown),     # unrecognized -> :unknown
+            ("", :unknown),                   # empty sacct output -> :unknown
+        )
+            with_fake_sacct(state) do
+                @test TurbulentTransport.check_slurm_status("12345") == expected
+            end
+        end
+
+        # A failing `sacct` (non-zero exit) is swallowed by the catch -> :unknown.
+        with_fake_sacct("__FAIL__") do
+            @test TurbulentTransport.check_slurm_status("12345") == :unknown
+        end
+    end
+
     @testset "default_results_dir" begin
         mktempdir() do tmp
             dir = TurbulentTransport.default_results_dir("MYSUB"; prefix=tmp)

@@ -48,6 +48,37 @@ using GACODE
         end
     end
 
+    @testset "load parse errors" begin
+        mktempdir() do tmp
+            # Unparseable integer field (NS is an Int field).
+            p_int = joinpath(tmp, "bad_int.tglf")
+            write(p_int, "NS=notanumber\n")
+            @test_throws ErrorException TurbulentTransport.load(InputTGLF(), p_int)
+
+            # Unparseable real field (BETAE is a Float64 field).
+            p_real = joinpath(tmp, "bad_real.tglf")
+            write(p_real, "BETAE=xyz\n")
+            @test_throws ErrorException TurbulentTransport.load(InputTGLF(), p_real)
+
+            # Neither key=value nor gen-style "value  key" -> invalid file error.
+            p_fmt = joinpath(tmp, "bad_fmt.tglf")
+            write(p_fmt, "just some text\n")
+            @test_throws ErrorException TurbulentTransport.load(InputTGLF(), p_fmt)
+        end
+    end
+
+    @testset "load gen-style (value  key) format" begin
+        mktempdir() do tmp
+            # gen-style: "<value><double-space><KEY>" for every line.
+            p = joinpath(tmp, "input.tglf.gen")
+            write(p, "3  NS\n3  SAT_RULE\n0.00362972  BETAE\n")
+            loaded = TurbulentTransport.load(InputTGLF(), p)
+            @test loaded.NS == 3
+            @test loaded.SAT_RULE == 3
+            @test loaded.BETAE ≈ 0.00362972
+        end
+    end
+
     @testset "parse_out_tglf_gbflux" begin
         # Sample output format from TGLF
         # Format: species values for [Gam, Q, Pi, S] × [elec, ion1, ion2, ...]
