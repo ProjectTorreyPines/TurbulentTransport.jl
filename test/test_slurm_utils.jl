@@ -17,7 +17,8 @@
         @test TurbulentTransport.check_slurm_status("") == :unknown
     end
 
-    @testset "check_slurm_status state mapping (fake sacct)" begin
+    # The fake `sacct` is a bash shim and SLURM is unix-only, so skip on Windows.
+    Sys.iswindows() || @testset "check_slurm_status state mapping (fake sacct)" begin
         # Map every documented sacct State to the driver's status symbol using a
         # fake `sacct` on PATH, so no real scheduler is required.
         for (state, expected) in (

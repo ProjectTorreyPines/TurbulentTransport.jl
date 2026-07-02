@@ -126,7 +126,8 @@
         end
     end
 
-    @testset "state pollers on a submitted run (fake sacct)" begin
+    # The fake `sacct` is a bash shim and SLURM is unix-only, so skip on Windows.
+    Sys.iswindows() || @testset "state pollers on a submitted run (fake sacct)" begin
         mktempdir() do tmp
             state = run_tjlfep(:ITER; submit=false, gpu=false, basedir=tmp)
             state.job_id = "12345"  # pretend it was submitted
@@ -163,7 +164,7 @@
         end
     end
 
-    @testset "refresh_tjlfep! failed job (fake sacct)" begin
+    Sys.iswindows() || @testset "refresh_tjlfep! failed job (fake sacct)" begin
         mktempdir() do tmp
             state = run_tjlfep(:D3D; submit=false, gpu=false, basedir=tmp)
             state.job_id = "99999"
