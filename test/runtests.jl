@@ -38,4 +38,5 @@ else
     include("test_tjlf_modes.jl")
     include("test_slurm_utils.jl")
     include("test_tglf_ep.jl")
+    include("test_dd_inputs.jl")
 end
