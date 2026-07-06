@@ -99,6 +99,108 @@ function _classify_mode_no_sign(em_ratio, ky_val, ie_ratio, emi_ratio, em_thresh
 end
 
 """
+    classify_modes_core(ky_spectrum, freq_by_ky, qlw_es_e, qlw_em_e, qlw_es_i, qlw_em_i,
+                        energy_flux_by_ky; em_threshold=0.5, ion_electron_threshold=0.5,
+                        ky_etg=2.0, signetg_ref=nothing)
+        -> NamedTuple (mode_per_ky, energy_flux_per_mode, dominant_mode,
+                       dominant_fraction, signetg, ignore_sign)
+
+Pure per-ky turbulence-mode classifier extracted from [`identify_modes`](@ref).
+Operates directly on raw per-ky arrays so callers that already have the spectra in
+memory (e.g. a TGLF-database parser) can classify without an `InputTJLF`/TJLF run.
+
+All array arguments are length `nky`:
+- `freq_by_ky`: eigenmode frequency at each ky (for the eigenmode being classified)
+- `qlw_es_e/qlw_em_e/qlw_es_i/qlw_em_i`: QL energy weights (type=energy) for the same
+  eigenmode — electrostatic/electromagnetic (phi/Apar) x electron/ion
+- `energy_flux_by_ky`: (saturated) energy flux at each ky, partitioned by the mode
+  classified there
+
+The ETG-scale frequency sign is normally derived from `freq_by_ky` at `ky>ky_etg`.
+Pass `signetg_ref` to reuse a sign computed from another eigenmode (e.g. use the
+most-unstable eigenmode's sign when classifying the subdominant one); `signetg_ref=0`
+forces the no-sign classification path. The returned `signetg`/`ignore_sign` can be
+fed back as `signetg_ref` for a subsequent call.
+"""
+function classify_modes_core(
+    ky_spectrum::AbstractVector,
+    freq_by_ky::AbstractVector,
+    qlw_es_e::AbstractVector,
+    qlw_em_e::AbstractVector,
+    qlw_es_i::AbstractVector,
+    qlw_em_i::AbstractVector,
+    energy_flux_by_ky::AbstractVector;
+    em_threshold::Real=0.5,
+    ion_electron_threshold::Real=0.5,
+    ky_etg::Real=2.0,
+    signetg_ref::Union{Nothing,Real}=nothing
+)
+    T = float(promote_type(eltype(ky_spectrum), eltype(freq_by_ky)))
+    nky = length(ky_spectrum)
+
+    # Determine frequency sign convention: average frequency at ETG-scale ky
+    local signetg::T, ignore_sign::Bool
+    if signetg_ref === nothing
+        etg_indices = findall(>(ky_etg), ky_spectrum)
+        signetg = zero(T)
+        ignore_sign = true
+        if !isempty(etg_indices)
+            etg_avg = sum(@view freq_by_ky[etg_indices]) / length(etg_indices)
+            if isfinite(etg_avg) && etg_avg != 0
+                signetg = T(sign(etg_avg))
+                ignore_sign = false
+            end
+        end
+    else
+        signetg = T(signetg_ref)
+        ignore_sign = signetg == 0
+    end
+
+    mode_per_ky = Vector{TurbulenceMode}(undef, nky)
+    for j in 1:nky
+        freq = freq_by_ky[j]
+        ky_val = ky_spectrum[j]
+
+        es_e = abs(qlw_es_e[j])
+        em_e = abs(qlw_em_e[j])
+        es_i = abs(qlw_es_i[j])
+        em_i = abs(qlw_em_i[j])
+
+        em_ratio = es_e > eps(T) ? em_e / es_e : (em_e > eps(T) ? T(Inf) : zero(T))
+        ie_ratio = es_e > eps(T) ? es_i / es_e : zero(T)
+
+        if !ignore_sign
+            mode_per_ky[j] = _classify_mode_with_sign(em_ratio, freq, ky_val, ie_ratio, signetg, em_threshold, ion_electron_threshold, ky_etg)
+        else
+            emi_ratio = em_e > eps(T) ? em_i / em_e : zero(T)
+            mode_per_ky[j] = _classify_mode_no_sign(em_ratio, ky_val, ie_ratio, emi_ratio, em_threshold, ion_electron_threshold, ky_etg)
+        end
+    end
+
+    energy_flux_per_mode = Dict{TurbulenceMode,T}(mode => zero(T) for mode in instances(TurbulenceMode))
+    for j in 1:nky
+        energy_flux_per_mode[mode_per_ky[j]] += T(energy_flux_by_ky[j])
+    end
+
+    # Dominant mode: largest signed energy flux (most outward transport)
+    dominant = first(instances(TurbulenceMode))
+    max_flux = typemin(T)
+    for mode in instances(TurbulenceMode)
+        if energy_flux_per_mode[mode] > max_flux
+            max_flux = energy_flux_per_mode[mode]
+            dominant = mode
+        end
+    end
+
+    total_abs = sum(abs, values(energy_flux_per_mode))
+    dominant_fraction = total_abs > 0 ? abs(energy_flux_per_mode[dominant]) / total_abs : one(T)
+
+    return (mode_per_ky=mode_per_ky, energy_flux_per_mode=energy_flux_per_mode,
+        dominant_mode=dominant, dominant_fraction=dominant_fraction,
+        signetg=signetg, ignore_sign=ignore_sign)
+end
+
+"""
     identify_modes(tjlf_result::NamedTuple, input_tjlf::InputTJLF; kw...)
 
 Classify turbulence modes from pre-computed TJLF results and determine the dominant
@@ -143,67 +245,27 @@ function identify_modes(
     ns = size(QL_weights, 2)
     @assert ns >= 2 "Need at least 2 species (electrons + ion) for mode identification"
 
-    # Determine frequency sign convention: average frequency at ETG-scale ky
-    frequencies = eigenvalue[1, :, 2]
-    etg_indices = findall(>(ky_etg), ky_spectrum)
-    signetg = zero(T)
-    ignore_sign = true
-    if !isempty(etg_indices)
-        etg_avg = sum(frequencies[etg_indices]) / length(etg_indices)
-        if isfinite(etg_avg) && etg_avg != 0
-            signetg = sign(etg_avg)
-            ignore_sign = false
-        end
-    end
-
-    mode_per_ky = Vector{TurbulenceMode}(undef, nky)
-    for j in 1:nky
-        freq = eigenvalue[1, j, 2]
-        ky_val = ky_spectrum[j]
-
-        # QL weights: field 1=phi, 2=A∥; species 1=electron, 2=first ion; mode 1; type 2=energy
-        qlw_es_e = abs(QL_weights[1, 1, 1, j, 2])
-        qlw_em_e = abs(QL_weights[2, 1, 1, j, 2])
-        qlw_es_i = abs(QL_weights[1, 2, 1, j, 2])
-        qlw_em_i = abs(QL_weights[2, 2, 1, j, 2])
-
-        em_ratio = qlw_es_e > eps(T) ? qlw_em_e / qlw_es_e : (qlw_em_e > eps(T) ? T(Inf) : zero(T))
-        ie_ratio = qlw_es_e > eps(T) ? qlw_es_i / qlw_es_e : zero(T)
-
-        if !ignore_sign
-            mode_per_ky[j] = _classify_mode_with_sign(em_ratio, freq, ky_val, ie_ratio, signetg, em_threshold, ion_electron_threshold, ky_etg)
-        else
-            emi_ratio = qlw_em_e > eps(T) ? qlw_em_i / qlw_em_e : zero(T)
-            mode_per_ky[j] = _classify_mode_no_sign(em_ratio, ky_val, ie_ratio, emi_ratio, em_threshold, ion_electron_threshold, ky_etg)
-        end
-    end
+    # Per-ky quantities for the most-unstable eigenmode (mode index 1).
+    # QL weights: field 1=phi, 2=A∥; species 1=electron, 2=first ion; type 2=energy
+    freq_by_ky = T[eigenvalue[1, j, 2] for j in 1:nky]
+    qlw_es_e = T[abs(QL_weights[1, 1, 1, j, 2]) for j in 1:nky]
+    qlw_em_e = T[abs(QL_weights[2, 1, 1, j, 2]) for j in 1:nky]
+    qlw_es_i = T[abs(QL_weights[1, 2, 1, j, 2]) for j in 1:nky]
+    qlw_em_i = T[abs(QL_weights[2, 2, 1, j, 2]) for j in 1:nky]
 
     # Energy flux at each ky: sum flux_spectrum over fields (1), species (2), modes (3) for energy channel (type=2)
     energy_flux_ky = vec(sum(@view(flux_spectrum[:, :, :, :, 2]); dims=(1, 2, 3)))
 
-    energy_flux_per_mode = Dict{TurbulenceMode,T}(mode => zero(T) for mode in instances(TurbulenceMode))
-    for j in 1:nky
-        energy_flux_per_mode[mode_per_ky[j]] += energy_flux_ky[j]
-    end
-
-    # Dominant mode: largest signed energy flux (most outward transport), matching Python convention
-    dominant = first(instances(TurbulenceMode))
-    max_flux = typemin(T)
-    for mode in instances(TurbulenceMode)
-        if energy_flux_per_mode[mode] > max_flux
-            max_flux = energy_flux_per_mode[mode]
-            dominant = mode
-        end
-    end
-
-    total_abs = sum(abs, values(energy_flux_per_mode))
-    dominant_fraction = total_abs > 0 ? abs(energy_flux_per_mode[dominant]) / total_abs : one(T)
+    res = classify_modes_core(
+        ky_spectrum, freq_by_ky, qlw_es_e, qlw_em_e, qlw_es_i, qlw_em_i, energy_flux_ky;
+        em_threshold, ion_electron_threshold, ky_etg)
 
     flux_sol = GACODE.FluxSolution{T}(
         TJLF.Qe(QL_flux_out), TJLF.Qi(QL_flux_out),
         TJLF.Γe(QL_flux_out), TJLF.Γi(QL_flux_out), TJLF.Πi(QL_flux_out))
 
-    return TJLFModeIdentification{T}(mode_per_ky, energy_flux_per_mode, dominant, dominant_fraction, ky_spectrum, flux_sol)
+    return TJLFModeIdentification{T}(res.mode_per_ky, res.energy_flux_per_mode,
+        res.dominant_mode, res.dominant_fraction, ky_spectrum, flux_sol)
 end
 
 """
@@ -241,7 +303,7 @@ function identify_modes(input_tjlfs::Vector{InputTJLF{T}}; kw...) where {T<:Real
 end
 
 export TurbulenceMode, ITG, TEM, KBM, ETG, MTM
-export AbstractModeIdentification, TJLFModeIdentification, identify_modes
+export AbstractModeIdentification, TJLFModeIdentification, identify_modes, classify_modes_core
 export MODE_COLORS, MODE_LABELS
 
 # ========== Fluctuation spectra reconstruction ==========
