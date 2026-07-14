@@ -437,6 +437,7 @@ function _flux_array_threaded!(all_yy::AbstractArray{T,3}, fluxensemble::TGLFNNe
             each_y = acquire!(thread_pool, T, nouts, nsamples)
             flux_array!(each_y, fluxensemble.models[k], x; warn_nn_train_bounds=(warn_nn_train_bounds && k == 1), fidelity)
             all_yy[:, :, k] = each_y
+            nothing
         end
     end
 end
@@ -449,6 +450,7 @@ function _flux_array_threaded!(all_yy::AbstractMatrix{T}, fluxensemble::TGLFNNen
             each_y = acquire!(thread_pool, T, nouts)
             flux_array!(each_y, fluxensemble.models[k], x; warn_nn_train_bounds=(warn_nn_train_bounds && k == 1), fidelity)
             all_yy[:, k] = each_y
+            nothing
         end
     end
 end
