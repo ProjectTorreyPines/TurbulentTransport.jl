@@ -26,13 +26,6 @@ import LinearAlgebra: BLAS
 const _QLNN_SPECIES = ("e", "D", "C")
 const _QLNN_FIELDS = ("phi", "apar", "bpar")  # bpar is optional (drop_bpar=true)
 
-# SAT-axis ky canonicalization toggle. Every CGYRO-flux QLNN bundle was trained
-# on the TGLF SAT1 (UNITS=GYRO, ky_factor=1) ky grid, so at inference the NN input
-# grid must be forced to GYRO regardless of the caller's SAT_RULE (SAT2/3 default
-# to UNITS=CGYRO, ky_factor=grad_r0). On by default; set QLNN_KY_SAT_CANON=false to
-# reproduce the legacy behavior (NN fed the caller's CGYRO grid) for A/B tests.
-_qlnn_sat_canon_enabled() =
-    lowercase(get(ENV, "QLNN_KY_SAT_CANON", "true")) in ("true", "1", "yes", "on")
 
 # regressor file names inside a bundle dir (e.g. models/QLNN/<name>.bson)
 const _QLNN_REGRESSOR_FILES = (
@@ -130,16 +123,6 @@ struct QLNNbundle
     eigenvalue::AbstractQLNNmodel
     stability::Union{Nothing,AbstractQLNNmodel}
     dir::String
-    # ky-axis FLAG canonicalization (2026-07-02). The CGYRO-flux training grid is
-    # TGLF SAT1 (UNITS=GYRO, ky_factor=1) at USE_AVE_ION_GRID=false. This marker
-    # governs only the FLAG axis: when the bundle was trained on the flag=false
-    # convention (prep-time CANONICALIZE_KY_GRID), inference forces
-    # USE_AVE_ION_GRID=false for the NN input grid. The SAT/UNITS axis (force
-    # UNITS=GYRO, drop grad_r0) is handled separately and is ON by default for ALL
-    # flux bundles (see `_qlnn_sat_canon_enabled`), since all were SAT1/GYRO-trained.
-    # Either way the recovered QL/γ are integrated on the TRUE grid (caller's
-    # UNITS/SAT_RULE + shot flag). Signalled by a `CANONICALIZE_KY_GRID` marker file.
-    canonicalize_ky_grid::Bool
 end
 
 function Base.show(io::IO, ::MIME"text/plain", b::QLNNbundle)
@@ -149,7 +132,6 @@ function Base.show(io::IO, ::MIME"text/plain", b::QLNNbundle)
     println(io, "  momentum:   ", _summary_line(b.momentum))
     println(io, "  eigenvalue: ", _summary_line(b.eigenvalue))
     println(io, "  stability:  ", b.stability === nothing ? "<none>" : _summary_line(b.stability))
-    println(io, "  canonicalize_ky_grid: ", b.canonicalize_ky_grid)
 end
 
 _summary_line(m::QLNNmodel) = "QLNNmodel(target=$(m.target))"
@@ -266,8 +248,7 @@ function loadqlnnbundle(name::AbstractString)
     eigval = loadqlnnmodelonce(joinpath(base, _QLNN_REGRESSOR_FILES.eigenvalue))
     stab_path = joinpath(base, _QLNN_STABILITY_FILE)
     stability = isfile(stab_path) ? loadqlnnmodelonce(stab_path) : nothing
-    canon = isfile(joinpath(base, "CANONICALIZE_KY_GRID"))
-    return QLNNbundle(energy, particle, momentum, eigval, stability, base, canon)
+    return QLNNbundle(energy, particle, momentum, eigval, stability, base)
 end
 
 "Memoize-wrapped bundle loader to avoid repeated path resolution."
@@ -1110,14 +1091,13 @@ function run_qlnn(input_tjlfs::Vector{TJLF.InputTJLF{T}}, bundle::QLNNbundle;
         c0 = pred.chunk_starts[r]
         nk = pred.nky_r[r]
         cols = c0:c0+nk-1
-        ks = pred.ky_spectrums[r]              # TRUE grid (flux integration)
-        ks_canon = pred.ky_canon_spectrums[r]  # canonical grid (NN un-normalization)
+        ks = pred.ky_spectrums[r]              # TRUE grid (NN inputs + flux integration)
         mask = nothing
         if pred.P_unstable !== nothing
             mask = Bool[pred.P_unstable[c0+j-1] >= stability_threshold for j in 1:nk]
         end
         flux_solutions[r] = _qlnn_integrate_radial(
-            input_tjlfs[r], pred.sat_params_v[r], ks, ks_canon,
+            input_tjlfs[r], pred.sat_params_v[r], ks,
             view(pred.Y_energy,   :, cols),
             view(pred.Y_particle, :, cols),
             view(pred.Y_momentum, :, cols),
@@ -1241,55 +1221,19 @@ function _run_qlnn_predict(input_tjlfs::Vector{TJLF.InputTJLF{T}}, bundle::QLNNb
         end
     end
 
-    # === ky-grid canonicalization (SAT/UNITS + USE_AVE_ION_GRID) =======
-    # `ky_spectrums` (true grid: caller's UNITS/SAT_RULE + shot USE_AVE_ION_GRID)
-    # drives KY_SPECTRUM + sum_ky_spectrum (physical flux) and the returned output
-    # axis. The QLNN flux surrogate was trained on unified **SAT1 (UNITS=GYRO)** at 
-    # USE_AVE_ION_GRID=false - i.e. `get_ky_spectrum(UNITS="GYRO", flag=false)`. 
-    # So the NN INPUT `ky` and the `over_ky` / `γ/ky` must use that canonical grid, 
-    # NOT the caller's SAT23/CGYRO shot-flag grid. Two independent axes:
-    #   * SAT axis (sat_canon, default ON): CGYRO (ky_factor=grad_r0) → GYRO
-    #     (ky_factor=1). Applies to ALL flux bundles (all trained on SAT1/GYRO).
-    #   * flag axis (flag_canon, bundle marker): USE_AVE_ION_GRID true → false
-    #     (ion-scale rescale via rho_ion). Only for bundles trained flag=false.
-    # The recovered QL weights / γ are then integrated on the TRUE grid
-    # (`ky_spectrums`) so fluxes still respect the caller's SAT_RULE/UNITS/flag.
-    # For a radius already at GYRO (+ flag=false when flag_canon) the grids coincide.
-    sat_canon = _qlnn_sat_canon_enabled()
-    flag_canon = bundle.canonicalize_ky_grid
-    ky_canon_spectrums = ky_spectrums
-    if sat_canon || flag_canon
-        ky_canon_spectrums = similar(ky_spectrums)
-        for r in 1:nr
-            it = input_tjlfs[r]
-            f = it.USE_AVE_ION_GRID
-            u = it.UNITS
-            want_f = flag_canon ? false : f
-            want_u = sat_canon ? "GYRO" : u
-            if f != want_f || u != want_u
-                it.USE_AVE_ION_GRID = want_f
-                it.UNITS = want_u
-                ky_canon_spectrums[r] = TJLF.get_ky_spectrum(it, sat_params_v[r].grad_r0)
-                it.USE_AVE_ION_GRID = f
-                it.UNITS = u
-            else
-                ky_canon_spectrums[r] = ky_spectrums[r]
-            end
-        end
-    end
-
     # === Phase 2: build ONE batched feature matrix =====================
     # Each per-radial chunk shares all features except the `ky` row.
     # `_qlnn_fill_xs!` writes into a view, so this is one big alloc + nr
     # in-place fills (vs. nr separate `Matrix{T}` allocations before).
-    # NN inputs use the CANONICAL grid (== true grid unless canonicalized).
+    # NN inputs use the caller's TRUE ky grid: UNITS/USE_AVE_ION_GRID only set the
+    # ky sample locations, and γ/QL(ky) is convention-independent, so no remapping.
     nfeat = length(energy_xnames)
     xs_all = Matrix{T}(undef, nfeat, total_nky)
     for r in 1:nr
         c0 = chunk_starts[r]
         nk = nky_r[r]
         @views _qlnn_fill_xs!(xs_all[:, c0:c0+nk-1], input_tjlfs[r],
-                              ky_canon_spectrums[r], energy_xnames)
+                              ky_spectrums[r], energy_xnames)
     end
 
     # Eigenvalue head / stability classifier may use a different feature set than
@@ -1301,7 +1245,7 @@ function _run_qlnn_predict(input_tjlfs::Vector{TJLF.InputTJLF{T}}, bundle::QLNNb
             c0 = chunk_starts[r]
             nk = nky_r[r]
             @views _qlnn_fill_xs!(xs[:, c0:c0+nk-1], input_tjlfs[r],
-                                  ky_canon_spectrums[r], xnames_vec)
+                                  ky_spectrums[r], xnames_vec)
         end
         xs
     end
@@ -1335,7 +1279,7 @@ function _run_qlnn_predict(input_tjlfs::Vector{TJLF.InputTJLF{T}}, bundle::QLNNb
     eig_norm_by_ky = bundle.eigenvalue.normalize_by_ky
 
     return (;
-        sat_params_v, ky_spectrums, ky_canon_spectrums, nky_r, chunk_starts,
+        sat_params_v, ky_spectrums, nky_r, chunk_starts,
         Y_energy, Y_particle, Y_momentum, Y_eig,
         P_unstable,
         info_e, info_p, info_m,
@@ -1357,7 +1301,6 @@ end
 function _qlnn_integrate_radial(input_tjlf::TJLF.InputTJLF{T},
                                 sat_params,
                                 ky_spectrum::AbstractVector,
-                                ky_spectrum_canon::AbstractVector,
                                 y_energy::AbstractMatrix,
                                 y_particle::AbstractMatrix,
                                 y_momentum::AbstractMatrix,
@@ -1368,21 +1311,20 @@ function _qlnn_integrate_radial(input_tjlf::TJLF.InputTJLF{T},
                                 nf::Int, ns::Int) where {T<:Real}
     nky = length(ky_spectrum)
     QL = zeros(T, nf, ns, 1, nky, 5)
-    # `over_ky` un-normalization multiplies each electron channel back by ky; use
-    # the CANONICAL grid so it inverts the training-time (canonical) division. The
-    # recovered physical QL is then integrated on the TRUE grid via input_tjlf.
-    _qlnn_pack_qlweight!(QL, y_energy,   info_e, _QLNN_TARGET_TYPE_IDX[:energy],   ky_spectrum_canon, mask)
-    _qlnn_pack_qlweight!(QL, y_particle, info_p, _QLNN_TARGET_TYPE_IDX[:particle], ky_spectrum_canon, mask)
-    _qlnn_pack_qlweight!(QL, y_momentum, info_m, _QLNN_TARGET_TYPE_IDX[:momentum], ky_spectrum_canon, mask)
+    # `over_ky` un-normalization multiplies each electron channel back by ky on the
+    # same (true) grid the NN was fed; the QL is then integrated on that grid.
+    _qlnn_pack_qlweight!(QL, y_energy,   info_e, _QLNN_TARGET_TYPE_IDX[:energy],   ky_spectrum, mask)
+    _qlnn_pack_qlweight!(QL, y_particle, info_p, _QLNN_TARGET_TYPE_IDX[:particle], ky_spectrum, mask)
+    _qlnn_pack_qlweight!(QL, y_momentum, info_m, _QLNN_TARGET_TYPE_IDX[:momentum], ky_spectrum, mask)
 
-    # Gamma matrix (1, nky). Multiply by ky (canonical) if eigenvalue head was
-    # trained on γ/ky — same rationale as the over_ky un-normalization above.
+    # Gamma matrix (1, nky). Multiply by ky if the eigenvalue head was trained on
+    # γ/ky — same rationale as the over_ky un-normalization above.
     Γ = zeros(T, 1, nky)
     Tz = zero(T)
     @inbounds for k in 1:nky
         γ = y_eig[1, k]
         if eig_norm_by_ky
-            γ = γ * ky_spectrum_canon[k]
+            γ = γ * ky_spectrum[k]
         end
         if mask !== nothing && !mask[k]
             γ = Tz
@@ -1624,11 +1566,11 @@ function qlnn_fluctuation_spectra(input_tjlfs::Vector{TJLF.InputTJLF{T}},
             c0 = pred.chunk_starts[r]
             nk = pred.nky_r[r]
             cols = c0:c0+nk-1
-            ks_canon = pred.ky_canon_spectrums[r]  # NN inputs + un-normalization
+            ks = pred.ky_spectrums[r]              # TRUE grid: NN inputs + un-normalization
             γ_phys, ω_phys = _qlnn_recover_eig(view(pred.Y_eig, :, cols),
-                                               ks_canon, pred.eig_norm_by_ky)
+                                               ks, pred.eig_norm_by_ky)
             xs_w = Matrix{T}(undef, length(width_model.xnames), nk)
-            _qlnn_fill_xs_with_eig!(xs_w, input_tjlfs[r], ks_canon,
+            _qlnn_fill_xs_with_eig!(xs_w, input_tjlfs[r], ks,
                                     width_model.xnames, γ_phys, ω_phys)
             y_w = predict(width_model, xs_w)  # (1, nk) for the width head
             # Width is positive; clamp tiny negative drift from NN extrapolation.
@@ -1644,8 +1586,7 @@ function qlnn_fluctuation_spectra(input_tjlfs::Vector{TJLF.InputTJLF{T}},
         c0 = pred.chunk_starts[r]
         nk = pred.nky_r[r]
         cols = c0:c0+nk-1
-        ks = pred.ky_spectrums[r]              # TRUE grid (physical intensity/output)
-        ks_canon = pred.ky_canon_spectrums[r]  # canonical grid (NN un-normalization)
+        ks = pred.ky_spectrums[r]              # TRUE grid (NN inputs, un-normalization, intensity/output)
         it = input_tjlfs[r]
         sat_params = pred.sat_params_v[r]
 
@@ -1655,22 +1596,21 @@ function qlnn_fluctuation_spectra(input_tjlfs::Vector{TJLF.InputTJLF{T}},
             mask = Bool[pred.P_unstable[c0+j-1] >= stability_threshold for j in 1:nk]
         end
 
-        # Build QL tensor (nf, ns, NMODES=1, nky, 5). over_ky un-normalization uses
-        # the canonical grid (inverts training-time division); physical intensity
-        # below uses the true grid via `it`.
+        # Build QL tensor (nf, ns, NMODES=1, nky, 5). over_ky un-normalization and
+        # physical intensity both use the true grid (`ks` / `it`).
         nf = pred.info_e.nf
         ns = pred.info_e.ns
         QL = zeros(T, nf, ns, 1, nk, 5)
         _qlnn_pack_qlweight!(QL, view(pred.Y_energy,   :, cols),
-                             pred.info_e, _QLNN_TARGET_TYPE_IDX[:energy],   ks_canon, mask)
+                             pred.info_e, _QLNN_TARGET_TYPE_IDX[:energy],   ks, mask)
         _qlnn_pack_qlweight!(QL, view(pred.Y_particle, :, cols),
-                             pred.info_p, _QLNN_TARGET_TYPE_IDX[:particle], ks_canon, mask)
+                             pred.info_p, _QLNN_TARGET_TYPE_IDX[:particle], ks, mask)
         _qlnn_pack_qlweight!(QL, view(pred.Y_momentum, :, cols),
-                             pred.info_m, _QLNN_TARGET_TYPE_IDX[:momentum], ks_canon, mask)
+                             pred.info_m, _QLNN_TARGET_TYPE_IDX[:momentum], ks, mask)
 
-        # Recover physical (γ, ω) per ky (un-normalize on the canonical grid).
+        # Recover physical (γ, ω) per ky (un-normalize on the true grid).
         γ_phys, ω_phys = _qlnn_recover_eig(view(pred.Y_eig, :, cols),
-                                           ks_canon, pred.eig_norm_by_ky)
+                                           ks, pred.eig_norm_by_ky)
 
         # Γ matrix for the saturation rule (1, nky), with stability mask applied.
         Γ = zeros(T, 1, nk)
