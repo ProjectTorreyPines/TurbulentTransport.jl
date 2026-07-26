@@ -2,6 +2,14 @@ import SHA
 import TurbulentTransport
 using TurbulentTransport: ensure_model_file!, is_lfs_pointer
 
+# The read-only scenario (container SIF, shared site install) only exists on
+# POSIX systems, and Windows chmod cannot make a directory non-writable to
+# simulate it — so this testset is POSIX-only.
+if Sys.iswindows()
+    @testset "Read-only model cache" begin
+        @test_skip "read-only directories cannot be simulated on Windows"
+    end
+else
 @testset "Read-only model cache" begin
     mktempdir() do dir
         # A fake model payload and a Git LFS pointer stub for it.
@@ -45,4 +53,5 @@ using TurbulentTransport: ensure_model_file!, is_lfs_pointer
             chmod(stubdir, 0o755)
         end
     end
+end
 end
