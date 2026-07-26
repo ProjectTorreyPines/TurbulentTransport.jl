@@ -4,6 +4,7 @@
 
 using Downloads
 using SHA
+using Scratch
 
 const _MODEL_SEARCH_PATHS = String[]  # Additional search paths from providers
 const _LFS_POINTER_PREFIX = "version https://git-lfs.github.com/spec/v1"
@@ -85,23 +86,85 @@ function _lfs_media_url(ref::AbstractString, relpath::AbstractString)
     return "https://media.githubusercontent.com/media/$(_LFS_REPO)/$(ref)/$(relpath)"
 end
 
+# Can we create files in `dir`? Probes with an actual write so it catches
+# read-only filesystems (EROFS, e.g. a container SIF) as well as plain
+# permission denials (EACCES, e.g. a shared site install).
+function _dir_writable(dir::AbstractString)
+    isdir(dir) || return false
+    probe = joinpath(dir, ".tt_write_probe_$(getpid())_$(rand(UInt32))")
+    try
+        touch(probe)
+        rm(probe; force=true)
+        return true
+    catch
+        return false
+    end
+end
+
+# Per-package-version scratch space used to materialize models when the
+# install itself is not writable. Keying by version invalidates the cache on
+# upgrade; the oid check on every hit guards content within a version.
+function _model_cache_dir()
+    ver = try
+        string(pkgversion(@__MODULE__))
+    catch
+        "dev"
+    end
+    return Scratch.get_scratch!(@__MODULE__, "models-v$ver")
+end
+
+# Cache destination for a model that cannot be materialized in place. Files
+# under the package root mirror their relative layout (so e.g. an .onnx and
+# its .data sidecar stay co-located); anything else gets a flat oid-keyed name.
+function _cache_dest(path::AbstractString, oid::AbstractString)
+    cache = _model_cache_dir()
+    root = _pkg_root()
+    p = normpath(abspath(path))
+    if startswith(p, root)
+        return joinpath(cache, relpath(p, root))
+    else
+        return joinpath(cache, "external", oid[1:16] * "-" * basename(p))
+    end
+end
+
+# ONNX models may reference an external-data sidecar (<model>.onnx.data) that
+# the runtime resolves relative to the .onnx file it opens. Whenever we hand
+# back a (possibly cache-redirected) .onnx path, make sure its sidecar exists
+# next to it too.
+function _ensure_onnx_sidecar!(path::AbstractString, dest::AbstractString)
+    endswith(lowercase(path), ".onnx") || return nothing
+    sidecar = path * ".data"
+    isfile(sidecar) || return nothing
+    resolved = ensure_model_file!(sidecar)
+    want = dest * ".data"
+    if resolved != want && !isfile(want)
+        mkpath(dirname(want))
+        cp(resolved, want)
+    end
+    return nothing
+end
+
 """
-    ensure_model_file!(path::AbstractString) -> path
+    ensure_model_file!(path::AbstractString) -> materialized_path
 
 If `path` is a Git LFS pointer stub (Pkg installs don't run `git lfs pull`),
-transparently materialize the real model bytes in place so callers see the
-same `path` they would have seen with a full LFS-aware checkout.
+transparently materialize the real model bytes and return the path callers
+should load. When the install is writable this happens in place, so the
+returned path equals `path`; when it is read-only (e.g. a container SIF or a
+shared site install) the bytes are materialized into a per-version scratch
+cache instead and *that* path is returned — callers must always use the
+returned path, not the argument.
 
 The Git LFS pointer's `oid sha256:...` is the source of truth: every download
-candidate is accepted only if its SHA-256 matches the pointer's oid, so a
-ref that drifts ahead/behind the installed package cannot silently swap in
-the wrong weights.
+candidate (and every cache hit) is accepted only if its SHA-256 matches the
+pointer's oid, so a ref that drifts ahead/behind the installed package cannot
+silently swap in the wrong weights.
 """
 function ensure_model_file!(path::AbstractString)
     isfile(path) || return path
     is_lfs_pointer(path) || return path
 
-    lock(_model_download_lock) do
+    dest = lock(_model_download_lock) do
         # Re-check under the lock: another task may have materialized it.
         is_lfs_pointer(path) || return path
 
@@ -110,10 +173,11 @@ function ensure_model_file!(path::AbstractString)
 
         root = _pkg_root()
         rel = relpath(path, root)
+        in_place = _dir_writable(dirname(path))
 
-        # 1) In a dev checkout, prefer `git lfs pull` — it uses the oid
-        #    internally and bypasses any ref guessing.
-        if isdir(joinpath(root, ".git"))
+        # 1) In a writable dev checkout, prefer `git lfs pull` — it uses the
+        #    oid internally and bypasses any ref guessing.
+        if in_place && isdir(joinpath(root, ".git"))
             try
                 run(setenv(`git -C $root lfs pull --include $rel`; stderr=devnull, stdin=devnull))
                 if !is_lfs_pointer(path) && _sha256_of_file(path) == spec.oid
@@ -123,10 +187,21 @@ function ensure_model_file!(path::AbstractString)
             end
         end
 
+        # Destination: in place when writable, else the scratch cache (where a
+        # previous materialization may already satisfy the oid).
+        target = path
+        if !in_place
+            target = _cache_dest(path, spec.oid)
+            if isfile(target) && filesize(target) == spec.size && _sha256_of_file(target) == spec.oid
+                return target
+            end
+            mkpath(dirname(target))
+        end
+
         # 2) Fall back to `media.githubusercontent.com`, trying refs in order
         #    and accepting only the one whose bytes hash to the pointer's oid.
         attempted = String[]
-        tmp = path * ".download"
+        tmp = target * ".download"
         for ref in _candidate_refs()
             url = _lfs_media_url(ref, rel)
             push!(attempted, ref)
@@ -134,8 +209,8 @@ function ensure_model_file!(path::AbstractString)
                 Downloads.download(url, tmp)
                 if isfile(tmp) && filesize(tmp) == spec.size &&
                    !is_lfs_pointer(tmp) && _sha256_of_file(tmp) == spec.oid
-                    mv(tmp, path; force=true)
-                    return path
+                    mv(tmp, target; force=true)
+                    return target
                 end
             catch
             end
@@ -151,7 +226,8 @@ function ensure_model_file!(path::AbstractString)
         )
     end
 
-    return path
+    _ensure_onnx_sidecar!(path, dest)
+    return dest
 end
 
 """

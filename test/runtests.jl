@@ -22,6 +22,8 @@ else
     include("test_load.jl")
     include("test_presets.jl")
     include("test_models.jl")
+
+    include("test_readonly_cache.jl")
     include("test_flux_array.jl")
     include("test_run_tglfnn.jl")
     include("test_finn.jl")
