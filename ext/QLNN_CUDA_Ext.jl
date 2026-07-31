@@ -78,6 +78,7 @@ struct QLNNbundleGPU
     eigenvalue::Union{QLNNmodelGPU,QLNNensembleGPU}
     stability::Union{Nothing,QLNNmodelGPU,QLNNensembleGPU}
     width::Union{Nothing,QLNNmodelGPU,QLNNensembleGPU}
+    momentum_sign::Float64
     dir::String
 end
 
@@ -157,7 +158,8 @@ function TurbulentTransport.qlnn_to_gpu(bundle::TurbulentTransport.QLNNbundle;
     stability_g  = bundle.stability === nothing ? nothing :
                    TurbulentTransport.qlnn_to_gpu(bundle.stability)
     width_g      = width === nothing ? nothing : TurbulentTransport.qlnn_to_gpu(width)
-    return QLNNbundleGPU(energy_g, particle_g, momentum_g, eigenvalue_g, stability_g, width_g, bundle.dir)
+    return QLNNbundleGPU(energy_g, particle_g, momentum_g, eigenvalue_g, stability_g, width_g,
+                         bundle.momentum_sign, bundle.dir)
 end
 
 # ==========================================================================
@@ -387,7 +389,9 @@ function TurbulentTransport.qlnn_fluctuation_spectra_gpu(
     # These tensors are tiny (≤ MB).
     Y_energy   = Float64.(Array(Y_energy_d))
     Y_particle = Float64.(Array(Y_particle_d))
-    Y_momentum = Float64.(Array(Y_momentum_d))
+    # Apply the per-bundle toroidal-stress sign convention (see QLNNbundle).
+    # The CPU path applies the same factor in `_run_qlnn_predict`.
+    Y_momentum = bundle_gpu.momentum_sign .* Float64.(Array(Y_momentum_d))
     Y_eig      = Float64.(Array(Y_eig_d))
     P_unstable = P_unstable_d === nothing ? nothing : vec(Float64.(Array(P_unstable_d)))
 

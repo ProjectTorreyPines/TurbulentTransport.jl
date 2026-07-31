@@ -122,6 +122,7 @@ struct QLNNbundle
     momentum::AbstractQLNNmodel
     eigenvalue::AbstractQLNNmodel
     stability::Union{Nothing,AbstractQLNNmodel}
+    momentum_sign::Float64
     dir::String
 end
 
@@ -248,7 +249,16 @@ function loadqlnnbundle(name::AbstractString)
     eigval = loadqlnnmodelonce(joinpath(base, _QLNN_REGRESSOR_FILES.eigenvalue))
     stab_path = joinpath(base, _QLNN_STABILITY_FILE)
     stability = isfile(stab_path) ? loadqlnnmodelonce(stab_path) : nothing
-    return QLNNbundle(energy, particle, momentum, eigval, stability, base)
+    momentum_sign = _qlnn_read_momentum_sign(base)
+    return QLNNbundle(energy, particle, momentum, eigval, stability, momentum_sign, base)
+end
+
+function _qlnn_read_momentum_sign(base::AbstractString)
+    path = joinpath(base, "momentum_sign")
+    isfile(path) || return -1.0
+    s = parse(Float64, strip(read(path, String)))
+    s in (-1.0, 1.0) || error("QLNN bundle `momentum_sign` file must contain +1 or -1 (got $s in $path)")
+    return s
 end
 
 "Memoize-wrapped bundle loader to avoid repeated path resolution."
@@ -937,9 +947,13 @@ function _qlnn_parse_qlweight_ynames(ynames::Vector{String})
     # Pin field order to canonical (phi, apar, bpar) so SAT params match TJLF.
     sort!(field_set; by=f -> findfirst(==(f), _QLNN_FIELDS)::Int)
     species_set = collect(_QLNN_SPECIES)
-    nf = length(field_set)
+    # Index rows by canonical field position (not position within this head's own
+    # subset): heads trained with drop_bpar (all-zero bpar rows removed from the
+    # DB, e.g. the d3d energy/momentum heads) see only (phi, apar), and the QL
+    # tensor they pack into may be shared with heads that kept bpar.
+    nf = maximum(findfirst(==(f), _QLNN_FIELDS)::Int for f in field_set)
     ns = length(species_set)
-    row_field = [findfirst(==(f), field_set)::Int for f in fields]
+    row_field = [findfirst(==(f), _QLNN_FIELDS)::Int for f in fields]
     row_species = [findfirst(==(s), species_set)::Int for s in species]
     return (; nf, ns, field_set, species_set, row_field, row_species, over_ky)
 end
@@ -1081,8 +1095,8 @@ function run_qlnn(input_tjlfs::Vector{TJLF.InputTJLF{T}}, bundle::QLNNbundle;
     end
 
     pred = _run_qlnn_predict(input_tjlfs, bundle; warn_nn_train_bounds=warn_nn_train_bounds)
-    nf = pred.info_e.nf
-    ns = pred.info_e.ns
+    nf = pred.nf
+    ns = pred.ns
 
     # === Phase 4: per-radial QL packing + sum_ky_spectrum ==============
     # Independent across radial points and free of NN forward passes, so
@@ -1133,6 +1147,8 @@ Returned NamedTuple fields:
 - `Y_eig`                          - `(n_eig_outputs, total_nky)` predictions
 - `P_unstable::Union{Nothing,Vector}`   - flattened σ-output of stability head
 - `info_e / info_p / info_m`      - parsed QL-weight ynames metadata
+- `nf / ns`                        - shared QL-tensor dims (nf = max across heads,
+                                    since drop_bpar heads carry fewer field rows)
 - `eig_norm_by_ky::Bool`          - whether eigenvalue head was trained on `γ/ky`
 - `xs_all::Matrix{T}`              - the (n_features, total_nky) batched inputs
                                     (kept so callers like `qlnn_fluctuation_spectra`
@@ -1149,10 +1165,16 @@ function _run_qlnn_predict(input_tjlfs::Vector{TJLF.InputTJLF{T}}, bundle::QLNNb
     info_p = _qlnn_parse_qlweight_ynames(bundle.particle.ynames)
     info_m = _qlnn_parse_qlweight_ynames(bundle.momentum.ynames)
 
-    # All three regressors should agree on (nf, ns).
-    if !(info_e.nf == info_p.nf == info_m.nf) || !(info_e.ns == info_p.ns == info_m.ns)
-        error("QLNN bundle has inconsistent (nf, ns) across energy/particle/momentum regressors.")
+    # All three regressors must agree on ns; nf MAY differ when some heads were
+    # trained with drop_bpar (all-zero bpar rows removed, e.g. the d3d bundle's
+    # energy/momentum heads with 6 outputs) while others kept bpar (particle
+    # with 9). The shared QL tensor is sized by the max nf; heads without bpar
+    # leave those slots zero — exactly the value the dropped training rows had.
+    if !(info_e.ns == info_p.ns == info_m.ns)
+        error("QLNN bundle has inconsistent ns across energy/particle/momentum regressors.")
     end
+    nf = max(info_e.nf, info_p.nf, info_m.nf)
+    ns = info_e.ns
     # The QL-weight trio (energy/particle/momentum) packs into one shared QL
     # tensor and therefore MUST agree on xnames — the batched feature matrix
     # below is built once from `bundle.energy.xnames` and reused for all three.
@@ -1267,7 +1289,10 @@ function _run_qlnn_predict(input_tjlfs::Vector{TJLF.InputTJLF{T}}, bundle::QLNNb
     # `eltype(xs_all)`, so Duals flow through unchanged.
     Y_energy   = predict(bundle.energy,     xs_all)
     Y_particle = predict(bundle.particle,   xs_all)
-    Y_momentum = -predict(bundle.momentum,  xs_all)  # trained with wrong sign; flip here
+    # Per-bundle momentum sign: the legacy CGYRO-trained `QLNN` bundle carries a
+    # flipped toroidal-stress sign (momentum_sign = -1, the default); TGLF-trained
+    # bundles are TJLF-native (+1 via the `momentum_sign` sidecar file).
+    Y_momentum = bundle.momentum_sign * predict(bundle.momentum, xs_all)
     Y_eig      = predict(bundle.eigenvalue, xs_eig)
     # Stability classifier output is `(1, total_nky)`; `vec(...)` flattens
     # so phase 4 can index `P_unstable[c0+j-1]` per radial chunk. Comparing
@@ -1283,6 +1308,7 @@ function _run_qlnn_predict(input_tjlfs::Vector{TJLF.InputTJLF{T}}, bundle::QLNNb
         Y_energy, Y_particle, Y_momentum, Y_eig,
         P_unstable,
         info_e, info_p, info_m,
+        nf, ns,
         eig_norm_by_ky,
         xs_all,
         energy_xnames,
@@ -1318,7 +1344,9 @@ function _qlnn_integrate_radial(input_tjlf::TJLF.InputTJLF{T},
     _qlnn_pack_qlweight!(QL, y_momentum, info_m, _QLNN_TARGET_TYPE_IDX[:momentum], ky_spectrum, mask)
 
     # Gamma matrix (1, nky). Multiply by ky if the eigenvalue head was trained on
-    # γ/ky — same rationale as the over_ky un-normalization above.
+    # γ/ky — same rationale as the over_ky un-normalization above. Negative NN
+    # growth-rate predictions are clamped to 0 (a stable mode has zero drive in
+    # the saturation rule; matches the validated evaluate_nn_fluxes.jl behavior).
     Γ = zeros(T, 1, nky)
     Tz = zero(T)
     @inbounds for k in 1:nky
@@ -1326,7 +1354,7 @@ function _qlnn_integrate_radial(input_tjlf::TJLF.InputTJLF{T},
         if eig_norm_by_ky
             γ = γ * ky_spectrum[k]
         end
-        if mask !== nothing && !mask[k]
+        if (mask !== nothing && !mask[k]) || γ < 0
             γ = Tz
         end
         Γ[1, k] = γ
@@ -1598,8 +1626,8 @@ function qlnn_fluctuation_spectra(input_tjlfs::Vector{TJLF.InputTJLF{T}},
 
         # Build QL tensor (nf, ns, NMODES=1, nky, 5). over_ky un-normalization and
         # physical intensity both use the true grid (`ks` / `it`).
-        nf = pred.info_e.nf
-        ns = pred.info_e.ns
+        nf = pred.nf
+        ns = pred.ns
         QL = zeros(T, nf, ns, 1, nk, 5)
         _qlnn_pack_qlweight!(QL, view(pred.Y_energy,   :, cols),
                              pred.info_e, _QLNN_TARGET_TYPE_IDX[:energy],   ks, mask)
@@ -1612,12 +1640,13 @@ function qlnn_fluctuation_spectra(input_tjlfs::Vector{TJLF.InputTJLF{T}},
         γ_phys, ω_phys = _qlnn_recover_eig(view(pred.Y_eig, :, cols),
                                            ks, pred.eig_norm_by_ky)
 
-        # Γ matrix for the saturation rule (1, nky), with stability mask applied.
+        # Γ matrix for the saturation rule (1, nky), with stability mask applied
+        # and negative NN growth rates clamped to 0 (mirrors run_qlnn).
         Γ = zeros(T, 1, nk)
         Tz = zero(T)
         @inbounds for k in 1:nk
             γ = γ_phys[k]
-            if mask !== nothing && !mask[k]
+            if (mask !== nothing && !mask[k]) || γ < 0
                 γ = Tz
             end
             Γ[1, k] = γ
