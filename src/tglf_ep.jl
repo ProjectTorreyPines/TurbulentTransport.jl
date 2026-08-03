@@ -342,12 +342,16 @@ function InputTGLF_EP(
         setproperty!(input_tglf, Symbol("RLTS_$ep_slot"), a * dlntidr_ep)
     end
 
-    input_tglf.BETAE = 8.0 * pi .* ne .* k .* Te ./ bunit .^ 2
-    loglam = 24.0 .- log.(sqrt.(ne) ./ Te)
-    input_tglf.XNUE = a ./ c_s * sqrt.(ions[1].element[1].a) .* e^4 .* pi .* ne .* loglam ./ (sqrt.(me) .* (k .* Te) .^ 1.5)
+    # cgs formulas (cf. tglf.jl and betae_full below): this function's working
+    # units are Te [keV], ne [1e19 m^-3], a [m] — convert before use.
+    ne_cgs = ne .* 1e13            # 1e19 m^-3 -> cm^-3
+    Te_eV = Te .* 1e3              # keV -> eV
+    input_tglf.BETAE = 8.0 * pi .* ne_cgs .* k .* Te_eV ./ bunit .^ 2
+    loglam = 24.0 .- log.(sqrt.(ne_cgs) ./ Te_eV)
+    input_tglf.XNUE = (a * 100) ./ c_s * sqrt.(ions[1].element[1].a) .* e^4 .* pi .* ne_cgs .* loglam ./ (sqrt.(me) .* (k .* Te_eV) .^ 1.5)
     input_tglf.ZEFF = cp1d.zeff[gridpoint_cp]
     rho_s = GACODE.rho_s(cp1d, eqt)[gridpoint_cp]
-    input_tglf.DEBYE = 7.43e2 * sqrt.(Te ./ ne) ./ rho_s
+    input_tglf.DEBYE = 7.43e2 * sqrt.(Te_eV ./ ne_cgs) ./ rho_s
     input_tglf.RMIN_LOC = rmin[gridpoint_cp] ./ a
     input_tglf.RMAJ_LOC = Rmaj[gridpoint_cp] ./ a
     input_tglf.ZMAJ_LOC = 0
