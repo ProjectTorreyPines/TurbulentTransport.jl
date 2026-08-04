@@ -86,4 +86,23 @@ using TurbulentTransport: InputTGLF, InputCGYRO, InputTGLFEP, InputTGLFs
         res_gp = InputTGLFEP(dd, [3, 6, 9], :sat0, false, false)
         @test res_gp[1] isa InputTGLFs
     end
+
+    @testset "InputTGLFEP units regression (BETAE/XNUE/DEBYE match InputTGLF)" begin
+        # Regression for a units bug where InputTGLF_EP fed its working-unit
+        # variables (Te [keV], ne [1e19 m^-3], a [m]) into the cgs formulas
+        # copied from tglf.jl (which expect eV, cm^-3, cm). BETAE came out
+        # ~1e16 too small, silently disabling all electromagnetic physics in
+        # the TJLFEP IMAS path (every Alfvenic scan returned "always stable").
+        # The electron-scale scalars must agree with the standard path exactly.
+        its_std = InputTGLF(dd, rho, :sat0, false, false)
+        its_ep, _ = InputTGLFEP(dd, rho, :sat0, false, false)
+        for k in eachindex(rho)
+            @test its_ep[k].BETAE ≈ its_std[k].BETAE rtol = 1e-10
+            @test its_ep[k].XNUE ≈ its_std[k].XNUE rtol = 1e-10
+            @test its_ep[k].DEBYE ≈ its_std[k].DEBYE rtol = 1e-10
+            # sanity: physically plausible magnitudes (the bug gave ~1e-19)
+            @test 1e-5 < its_ep[k].BETAE < 1e-1
+            @test its_ep[k].XNUE > 1e-4
+        end
+    end
 end
