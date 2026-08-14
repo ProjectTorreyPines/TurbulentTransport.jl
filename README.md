@@ -6,7 +6,7 @@
 TurbulentTransport.jl runs tokamak turbulent-transport models from a common
 interface: the first-principles codes **TGLF**, **TJLF** (the Julia
 reimplementation), and **QLGYRO**, and a family of fast **neural-network
-surrogates** (TGLF-NN, GKNN, QLNN, FINN, ModeID) trained to reproduce them in
+surrogates** (TGLF-NN, GKNN, QLNN, FINN, ModeID-NN) trained to reproduce them in
 milliseconds. It builds the model inputs directly from IMAS data structures, so
 it plugs straight into FUSE and related ProjectTorreyPines tools.
 
