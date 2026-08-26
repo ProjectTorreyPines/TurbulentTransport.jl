@@ -220,7 +220,7 @@ function InputTGLF(
         end
     end
 
-    press = cp1d.pressure_thermal
+    press = cp1d.pressure
     Pa_to_dyn = 10.0
 
     dpdr = @views IMAS.gradient(rmin, press)[gridpoint_cp] .* Pa_to_dyn
