@@ -196,14 +196,14 @@ function run_modeid_nn(dd::IMAS.dd, rho_transport::AbstractVector{<:Real};
                 # Log10-transformed feature: get base parameter and apply log10
                 base_name = _LOG10_FEATURES[xname]
                 val = getfield(it, Symbol(base_name))
-                if ismissing(val)
-                    error("ModeID input field '$base_name' is Missing at rho=$rho")
+                if TJLF.is_unset(val)
+                    error("ModeID input field '$base_name' is unset (missing/NaN) at rho=$rho")
                 end
                 inputs[j, i] = Float32(log10(max(Float64(val), 1e-10)))
             else
                 val = getfield(it, Symbol(xname))
-                if ismissing(val)
-                    error("ModeID input field '$xname' is Missing at rho=$rho")
+                if TJLF.is_unset(val)
+                    error("ModeID input field '$xname' is unset (missing/NaN) at rho=$rho")
                 end
                 inputs[j, i] = Float32(val)
             end

@@ -110,7 +110,7 @@ function save(input::Union{InputTGLF,InputCGYRO,InputQLGYRO}, filename::Abstract
             end
             try
                 value = getfield(input, key)
-                if ismissing(value)
+                if TJLF.is_unset(value)   # missing, NaN sentinel, or empty string
                     continue
                 elseif isa(value, Int)
                     println(io, "$(key)=$(convert(Int, value))")
@@ -147,7 +147,7 @@ function compare_two_input_tglfs(itp_1::InputTGLF{T}, itp_2::InputTGLF{T}) where
     for key in fieldnames(typeof(itp_diff))
         itp_1_value = getproperty(itp_1, key)
         itp_diff_value = getproperty(itp_diff, key)
-        if typeof(itp_diff_value) <: String || typeof(itp_diff_value) <: Missing
+        if typeof(itp_diff_value) <: String || TJLF.is_unset(itp_diff_value)
             continue
         end
         println("Difference for $key = $(round(itp_diff_value/itp_1_value*100,digits=2)) % itp_2 = $(itp_diff_value+itp_1_value), itp_1 = $itp_1_value ")

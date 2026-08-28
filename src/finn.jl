@@ -165,8 +165,8 @@ function run_finn(dd::IMAS.dd, rho_transport::AbstractVector{<:Real};
                 inputs[j, i] = sources_gB.Pi[i]
             else
                 val = getfield(it, Symbol(xname))
-                if ismissing(val)
-                    error("FINN input field '$xname' is Missing at rho=$rho")
+                if TJLF.is_unset(val)
+                    error("FINN input field '$xname' is unset (missing/NaN) at rho=$rho")
                 end
                 inputs[j, i] = Float64(val)
             end

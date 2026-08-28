@@ -107,7 +107,7 @@ Zero-allocation field extraction using compile-time unrolled field access.
     for (i, s) in enumerate(symbols)
         push!(exprs, quote
             let value = getfield(obj, $(QuoteNode(s)))
-                if ismissing(value)
+                if TJLF.is_unset(value)   # missing or NaN sentinel — never feed the NN
                     _throw_missing_field_error($(QuoteNode(s)), index)
                 end
                 @inbounds inputs[$i] = value
@@ -1660,7 +1660,7 @@ function _apply_stfpp_transform!(t::InputTGLF; dtf::Float64=0.5, device::Abstrac
         end
     end
     # Remember original AS_2 before splitting (from temp now)
-    if haskey(temp, "AS_2") && temp["AS_2"] !== missing
+    if haskey(temp, "AS_2") && !TJLF.is_unset(temp["AS_2"])
         original_as_2 = temp["AS_2"]
         temp["AS_2"] = original_as_2 * dtf
         temp["AS_3"] = original_as_2 * (1 - dtf)
@@ -1680,9 +1680,9 @@ function _apply_stfpp_transform!(t::InputTGLF; dtf::Float64=0.5, device::Abstrac
                 # Ignore type mismatch silently
             end
         else
-            # If this was a dropped *_5 (original) ensure it's missing
+            # If this was a dropped *_5 (original) reset it to the NaN "unset" sentinel
             if endswith(fname, "_5")
-                try; setfield!(t, f, missing); catch; end
+                try; setfield!(t, f, oftype(getfield(t, f), NaN)); catch; end
             end
         end
     end
