@@ -95,13 +95,39 @@ else
         end
 
         @testset "ALPHA_ZF flows into the integrated flux" begin
-            # SAT_RULE=2 honors ALPHA_ZF in `intensity_sat`; flipping the sign
-            # must change the integrated electron heat flux.
-            qe_zf_neg = _qlnn_qe(; sat_rule=2, alpha_zf=-1.0)
-            qe_zf_pos = _qlnn_qe(; sat_rule=2, alpha_zf=+1.0)
-            @test isfinite(qe_zf_neg)
-            @test isfinite(qe_zf_pos)
-            @test !isapprox(qe_zf_neg, qe_zf_pos; rtol=1e-4)
+            # SAT_RULE=2 honors ALPHA_ZF via `czf = abs(alpha_zf)` in
+            # `intensity_sat`, so changing the magnitude must change the
+            # integrated electron heat flux. (Don't test the sign flip: the
+            # sign only gates a low-k kymin cutoff in the zonal-mixing peak
+            # search, which is a no-op whenever the NN-predicted gamma/ky
+            # spectrum peaks above the cutoff — model- and input-dependent.)
+            qe_zf_1 = _qlnn_qe(; sat_rule=2, alpha_zf=-1.0)
+            qe_zf_h = _qlnn_qe(; sat_rule=2, alpha_zf=-0.5)
+            @test isfinite(qe_zf_1)
+            @test isfinite(qe_zf_h)
+            @test !isapprox(qe_zf_1, qe_zf_h; rtol=1e-4)
+        end
+
+        @testset "ALPHA_ZF sign flows into the integrated flux" begin
+            # The sign branch (kymin cutoff) is only active when the predicted
+            # gamma/ky spectrum peaks below the cutoff, so it needs an input
+            # known to exercise it for the current default bundle:
+            # input_zf_sign.tglf (TJLF regression case tglf13).
+            function _qe_sign(alpha_zf::Real)
+                it = TJLF.readInput(joinpath(@__DIR__, "data", "input_zf_sign.tglf"))
+                it.SAT_RULE = 2
+                it.UNITS = "CGYRO"
+                it.ALPHA_ZF = Float64(alpha_zf)
+                sol = TurbulentTransport.run_qlnn(it;
+                                                  bundle_name=QLNN_BUNDLE_NAME,
+                                                  warn_nn_train_bounds=false)
+                return sol.ENERGY_FLUX_e
+            end
+            qe_neg = _qe_sign(-1.0)
+            qe_pos = _qe_sign(+1.0)
+            @test isfinite(qe_neg)
+            @test isfinite(qe_pos)
+            @test !isapprox(qe_neg, qe_pos; rtol=1e-4)
         end
 
         @testset "warn_nn_train_bounds emits @warn for out-of-range inputs" begin
