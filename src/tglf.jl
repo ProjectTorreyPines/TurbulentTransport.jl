@@ -1,5 +1,6 @@
 function Base.show(io::IO, ::MIME"text/plain", input_tglf::InputTGLF)
     for fname in sort!(collect(fieldnames(typeof(input_tglf))))
+        startswith(String(fname), "_") && continue   # bookkeeping (_Qgb, _set_fields)
         value = getfield(input_tglf, fname)
         species_idx = tryparse(Int, split(string(fname), "_")[end])
         if !TJLF.is_unset(value) && (species_idx === nothing || species_idx <= input_tglf.NS)

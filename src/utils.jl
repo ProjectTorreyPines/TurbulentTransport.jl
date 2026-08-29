@@ -137,6 +137,7 @@ Compares two input_tglfs, prints the difference and stores the difference in a n
 function compare_two_input_tglfs(itp_1::InputTGLF{T}, itp_2::InputTGLF{T}) where {T<:Real}
     itp_diff = InputTGLF{T}()
     for field in fieldnames(typeof(itp_diff))
+        startswith(String(field), "_") && continue   # bookkeeping, not a comparable value
         if typeof(getproperty(itp_1, field)) <: String
             setproperty!(itp_diff, field, getproperty(itp_1, field) * "  " * getproperty(itp_2, field))
         else
@@ -145,6 +146,7 @@ function compare_two_input_tglfs(itp_1::InputTGLF{T}, itp_2::InputTGLF{T}) where
     end
 
     for key in fieldnames(typeof(itp_diff))
+        startswith(String(key), "_") && continue
         itp_1_value = getproperty(itp_1, key)
         itp_diff_value = getproperty(itp_diff, key)
         if typeof(itp_diff_value) <: String || TJLF.is_unset(itp_diff_value)
