@@ -129,6 +129,13 @@ include `d3d`, `mastu`, `nstx`, `ukstep`, `iter`, `fpp`/`stfpp`, multi-machine c
 (`d3d+mastu+nstx`), edge variants (`d3dedge`, `d3dnearedge`), and `withnegD` (negative
 triangularity). Suffixes such as `gknn*`, `tglfnn24` denote correction/companion models.
 
+Core models listed in `TurbulentTransport._RADIAL_BLEND_VARIANTS` are blended radially at
+evaluation time: each radial point is served by the core net for `RMIN_LOC < 0.881`, by the
+near-edge net for `0.881 <= RMIN_LOC < 0.975` and by the edge net beyond. Families with
+variants: `sat{0quench,1,2,3}_em_d3d_azf±1_withnegD` (`d3dnearedge` / `d3dedge`) and the
+spherical-tokamak `sat3_em_mastu+nstx_azf-1_withnegD` (`mastunearedge+nstxnearedge` /
+`mastuedge+nstxedge`, joint MAST-U + NSTX, positive and negative triangularity).
+
 List what is installed with `available_models()` (TGLF-NN / GKNN model files) and
 `available_qlnn_bundles()` (QLNN bundle directories).
 
