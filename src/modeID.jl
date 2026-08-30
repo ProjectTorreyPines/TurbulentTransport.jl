@@ -329,7 +329,7 @@ function run_modeid_qlnn(dd::IMAS.dd, rho_transport::AbstractVector{<:Real};
     if hasproperty(input_tglfs, :tglfs)
         input_tglfs = input_tglfs.tglfs
     end
-    input_tjlfs = InputTJLF{Float64}[InputTJLF{Float64}(input_tglfs[k]) for k in eachindex(rho_transport)]
+    input_tjlfs = InputTJLF{Float64}[to_input_tjlf(input_tglfs[k]) for k in eachindex(rho_transport)]
     return run_modeid_qlnn(input_tjlfs;
         bundle_name, warn_nn_train_bounds, stability_threshold,
         em_threshold, ion_electron_threshold, ky_etg)

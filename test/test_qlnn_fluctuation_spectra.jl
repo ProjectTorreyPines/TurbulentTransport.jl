@@ -24,7 +24,7 @@ else
     @testset "qlnn_fluctuation_spectra smoke tests" begin
         # Load the same fixture the rest of the QLNN tests use. The TJLF
         # reference path requires SAT_RULE ∈ {1,2,3} and ALPHA_QUENCH=0.
-        input_tglf = load_sample_input()
+        input_tglf = load_sample_input_cgyro()
         input_tjlf_qlnn = InputTJLF{Float64}(input_tglf)
         input_tjlf_tjlf = InputTJLF{Float64}(input_tglf)
         for it in (input_tjlf_qlnn, input_tjlf_tjlf)

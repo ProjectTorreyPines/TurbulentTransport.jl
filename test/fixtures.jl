@@ -44,6 +44,19 @@ function load_sample_input()
     TurbulentTransport.load(InputTGLF{Float64}(), SAMPLE_INPUT_PATH)
 end
 
+# The sample input is SAT_RULE=3 in GYRO units. TJLF 2 defines SAT2/3 in CGYRO units
+# only and rejects the combination as soon as an InputTJLF is built from it
+# (`checkInput` runs inside `update_input_tjlf!`, before any presets), so tests that
+# need an InputTJLF must switch the units first — exactly what `apply_presets!` and
+# the run_tglf/run_tjlf paths do at runtime.
+function load_sample_input_cgyro()
+    input_tglf = load_sample_input()
+    input_tglf.UNITS = "CGYRO"
+    return input_tglf
+end
+
+load_sample_input_tjlf() = InputTJLF{Float64}(load_sample_input_cgyro())
+
 # Load the sample IMAS `dd` and select a valid global time. IMAS is reached via
 # the TurbulentTransport namespace so no extra test-project dependency is needed.
 function load_sample_dd()

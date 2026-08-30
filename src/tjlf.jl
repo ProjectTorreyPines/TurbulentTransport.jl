@@ -280,12 +280,37 @@ function identify_modes(input_tjlf::InputTJLF{T}; kw...) where {T<:Real}
 end
 
 """
+    tjlf_compatible(input_tglf::InputTGLF)
+
+Return `input_tglf`, or a copy of it with `UNITS="CGYRO"`, ready for conversion to
+`InputTJLF`. TJLF defines `SAT_RULE` 2 and 3 in CGYRO units only and rejects a GYRO
+input as soon as the `InputTJLF` is built (`checkInput` runs inside
+`update_input_tjlf!`, before any presets). Fortran TGLF's `USE_PRESETS=.TRUE.` switches
+the units silently; do the same here so SAT2/3 inputs in GYRO units keep working.
+"""
+function tjlf_compatible(input_tglf::InputTGLF)
+    if input_tglf.SAT_RULE in (2, 3) && input_tglf.UNITS == "GYRO" && input_tglf.USE_PRESETS
+        input_tglf = deepcopy(input_tglf)
+        input_tglf.UNITS = "CGYRO"
+    end
+    return input_tglf
+end
+
+"""
+    to_input_tjlf(input_tglf::InputTGLF{T}) -> InputTJLF{T}
+
+Convert an `InputTGLF` to an `InputTJLF`, normalising the units first (see
+[`tjlf_compatible`](@ref)). Use this instead of calling `InputTJLF{T}(input_tglf)` directly.
+"""
+to_input_tjlf(input_tglf::InputTGLF{T}) where {T<:Real} = InputTJLF{T}(tjlf_compatible(input_tglf))
+
+"""
     identify_modes(input_tglf::InputTGLF; kw...)
 
 Convert InputTGLF to InputTJLF, run TJLF, and classify turbulence modes.
 """
 function identify_modes(input_tglf::InputTGLF; kw...)
-    input_tjlf = InputTJLF{Float64}(input_tglf)
+    input_tjlf = to_input_tjlf(input_tglf)
     return identify_modes(input_tjlf; kw...)
 end
 
@@ -513,7 +538,7 @@ function fluctuation_spectra(input_tjlf::InputTJLF{T}; kw...) where {T<:Real}
 end
 
 function fluctuation_spectra(input_tglf::InputTGLF; kw...)
-    input_tjlf = InputTJLF{Float64}(input_tglf)
+    input_tjlf = to_input_tjlf(input_tglf)
     return fluctuation_spectra(input_tjlf; kw...)
 end
 
@@ -640,6 +665,6 @@ function run_tjlf(input_tjlf::InputTJLF{T}) where {T<:Real}
 end
 
 function run_tjlf(input_tglf::InputTGLF)
-    input_tjlf = InputTJLF{Float64}(input_tglf)
+    input_tjlf = to_input_tjlf(input_tglf)
     return run_tjlf(input_tjlf)
 end

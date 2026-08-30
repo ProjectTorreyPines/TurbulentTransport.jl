@@ -455,7 +455,7 @@ function generate_ky_grid(input_tglf::InputTGLF; nky::Int=0, ky::Float64=0.0, ky
         # Delegate to TJLF's get_ky_spectrum for models 1-4
         nky_total = TJLF.get_ky_spectrum_size(nky_in, model)
         input_tjlf = InputTJLF{Float64}(input_tglf.NS, nky_total)
-        TJLF.update_input_tjlf!(input_tjlf, input_tglf)
+        TJLF.update_input_tjlf!(input_tjlf, tjlf_compatible(input_tglf))
         input_tjlf.KYGRID_MODEL = model
         input_tjlf.NKY = nky_in
 

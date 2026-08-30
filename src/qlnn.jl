@@ -1739,12 +1739,12 @@ function qlnn_fluctuation_spectra(input_tjlf::TJLF.InputTJLF{T}, bundle::QLNNbun
 end
 
 function qlnn_fluctuation_spectra(input_tglf::TJLF.InputTGLF; kw...)
-    input_tjlf = TJLF.InputTJLF{Float64}(input_tglf)
+    input_tjlf = to_input_tjlf(input_tglf)
     return qlnn_fluctuation_spectra(input_tjlf; kw...)
 end
 
 function qlnn_fluctuation_spectra(input_tglfs::Vector{TJLF.InputTGLF{T}}; kw...) where {T<:Real}
-    input_tjlfs = TJLF.InputTJLF{T}[TJLF.InputTJLF{T}(it) for it in input_tglfs]
+    input_tjlfs = TJLF.InputTJLF{T}[to_input_tjlf(it) for it in input_tglfs]
     return qlnn_fluctuation_spectra(input_tjlfs; kw...)
 end
 
@@ -1785,7 +1785,7 @@ end
 # because the caller is typically `ActorTGLF._step`, which already maintains
 # a Vector{InputTJLF} for `:QLNN` so width memory survives across iterations.
 function run_qlnn(input_tglfs::Vector{TJLF.InputTGLF{T}}; kw...) where {T<:Real}
-    input_tjlfs = TJLF.InputTJLF{T}[TJLF.InputTJLF{T}(it) for it in input_tglfs]
+    input_tjlfs = TJLF.InputTJLF{T}[to_input_tjlf(it) for it in input_tglfs]
     return run_qlnn(input_tjlfs; kw...)
 end
 
