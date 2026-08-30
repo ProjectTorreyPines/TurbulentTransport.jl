@@ -41,7 +41,7 @@ const EXPECTED_LOAD_VALUES = (
 
 # Load sample InputTGLF
 function load_sample_input()
-    TurbulentTransport.load(InputTGLF(), SAMPLE_INPUT_PATH)
+    TurbulentTransport.load(InputTGLF{Float64}(), SAMPLE_INPUT_PATH)
 end
 
 # Load the sample IMAS `dd` and select a valid global time. IMAS is reached via

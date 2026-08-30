@@ -21,7 +21,7 @@
         filepath = joinpath(tmpdir, "input.tglf")
         try
             write(filepath, content)
-            input_tglf = TurbulentTransport.load(InputTGLF(), filepath)
+            input_tglf = TurbulentTransport.load(InputTGLF{Float64}(), filepath)
             @test input_tglf.USE_BPER == true
             @test input_tglf.USE_BPAR == false
         finally
@@ -40,7 +40,7 @@
         filepath = joinpath(tmpdir, "input.tglf")
         try
             write(filepath, content)
-            input_tglf = TurbulentTransport.load(InputTGLF(), filepath)
+            input_tglf = TurbulentTransport.load(InputTGLF{Float64}(), filepath)
             @test input_tglf.NS == 3
             @test input_tglf.SAT_RULE == 2
             @test input_tglf.BETAE == 0.0015
@@ -62,7 +62,7 @@
         filepath = joinpath(tmpdir, "input.tglf.gen")
         try
             write(filepath, content)
-            input_tglf = TurbulentTransport.load(InputTGLF(), filepath)
+            input_tglf = TurbulentTransport.load(InputTGLF{Float64}(), filepath)
             @test input_tglf.NS == 3
             @test input_tglf.Q_LOC == 2.0
             @test input_tglf.BETAE == 0.003
@@ -82,7 +82,7 @@
         filepath = joinpath(tmpdir, "invalid.tglf")
         try
             write(filepath, content)
-            @test_throws ErrorException TurbulentTransport.load(InputTGLF(), filepath)
+            @test_throws ErrorException TurbulentTransport.load(InputTGLF{Float64}(), filepath)
         finally
             rm(tmpdir; force=true, recursive=true)
         end
@@ -98,7 +98,7 @@
         filepath = joinpath(tmpdir, "input.tglf")
         try
             write(filepath, content)
-            input_tglf = TurbulentTransport.load(InputTGLF(), filepath)
+            input_tglf = TurbulentTransport.load(InputTGLF{Float64}(), filepath)
             @test input_tglf.USE_BPER == true
             @test input_tglf.USE_BPAR == false
         finally
@@ -115,7 +115,7 @@
         filepath = joinpath(tmpdir, "input.tglf")
         try
             write(filepath, content)
-            input_tglf = TurbulentTransport.load(InputTGLF(), filepath)
+            input_tglf = TurbulentTransport.load(InputTGLF{Float64}(), filepath)
             @test input_tglf.UNITS == "CGYRO"
         finally
             rm(tmpdir; force=true, recursive=true)
@@ -133,7 +133,7 @@
         try
             write(filepath, content)
             # Should not error; unknown fields are silently skipped
-            input_tglf = TurbulentTransport.load(InputTGLF(), filepath)
+            input_tglf = TurbulentTransport.load(InputTGLF{Float64}(), filepath)
             @test input_tglf.NS == 2
             @test input_tglf.Q_LOC == 1.5
         finally
