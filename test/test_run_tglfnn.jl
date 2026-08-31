@@ -315,14 +315,52 @@ end
     end
 end
 
+@testset "radial blending selects the variant nets" begin
+    # Each radial region must reproduce the corresponding variant net evaluated on its own,
+    # for both the InputTGLF and the Dict entry points.
+    @testset "Model: $model_name" for model_name in keys(TurbulentTransport._RADIAL_BLEND_VARIANTS)
+        nearedge_name, edge_name, r_ne, r_edge = TurbulentTransport.radial_blend_variants(model_name)
+        @test r_ne < r_edge
+        base = load_sample_input()
+        TurbulentTransport.apply_presets!(base)
+        regions = ((0.5 * r_ne, model_name), (0.5 * (r_ne + r_edge), nearedge_name), (0.5 * (r_edge + 1.0), edge_name))
+        inputs = typeof(base)[]
+        for (rmin, _) in regions
+            it = deepcopy(base)
+            it.RMIN_LOC = rmin
+            push!(inputs, it)
+        end
+        blended = TurbulentTransport.run_tglfnn(inputs; model_filename=model_name, warn_nn_train_bounds=false)
+        for (k, (_, variant)) in enumerate(regions)
+            direct = TurbulentTransport.run_tglfnn(inputs[k]; model_filename=variant, warn_nn_train_bounds=false)
+            @test blended[k].ENERGY_FLUX_e ≈ direct.ENERGY_FLUX_e rtol=REGRESSION_RTOL
+            @test blended[k].ENERGY_FLUX_i ≈ direct.ENERGY_FLUX_i rtol=REGRESSION_RTOL
+            @test blended[k].PARTICLE_FLUX_e ≈ direct.PARTICLE_FLUX_e rtol=REGRESSION_RTOL
+            @test blended[k].STRESS_TOR_i ≈ direct.STRESS_TOR_i rtol=REGRESSION_RTOL
+        end
+        # Dict entry point blends the same way
+        tglfmod = TurbulentTransport.loadmodelonce(model_name)
+        xnames = [replace(name, "_log10" => "") for name in tglfmod.xnames]
+        data = Dict(name => [Float64(getproperty(it, Symbol(name))) for it in inputs] for name in xnames)
+        ydict = TurbulentTransport.run_tglfnn(data; model_filename=model_name, warn_nn_train_bounds=false)
+        for (k, (_, variant)) in enumerate(regions)
+            direct = TurbulentTransport.run_tglfnn(inputs[k]; model_filename=variant, warn_nn_train_bounds=false)
+            @test ydict["Q_elec"][k] ≈ direct.ENERGY_FLUX_e rtol=REGRESSION_RTOL
+            @test ydict["Q_ions"][k] ≈ direct.ENERGY_FLUX_i rtol=REGRESSION_RTOL
+        end
+    end
+end
+
 @testset "run_tglfnn radial-dependent models" begin
     # Test models with radial-dependent blending (d3d, d3dnearedge, d3dedge variants)
     radial_models = (
         "sat0quench_em_d3d_azf+1_withnegD",
         "sat1_em_d3d_azf-1_withnegD",
         "sat2_em_d3d_azf-1_withnegD",
-        "sat3_em_d3d_azf-1_withnegD"
+        "sat3_em_d3d_azf-1_withnegD",
+        "sat3_em_mastu+nstx_azf-1_withnegD"
     )
+    @test Set(keys(TurbulentTransport._RADIAL_BLEND_VARIANTS)) == Set(radial_models)
 
     @testset "Model: $model_name" for model_name in radial_models
         # Create test inputs with different RMIN_LOC values covering all radial regions

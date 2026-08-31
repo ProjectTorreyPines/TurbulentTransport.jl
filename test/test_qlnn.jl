@@ -53,7 +53,7 @@ else
         end
 
         @testset "run_qlnn produces a finite FluxSolution" begin
-            input_tglf = load_sample_input()
+            input_tglf = load_sample_input_cgyro()
             input_tjlf = InputTJLF{Float64}(input_tglf)
 
             sol = TurbulentTransport.run_qlnn(input_tjlf;
@@ -74,7 +74,7 @@ else
         # override. Each call gets a fresh InputTJLF (so width memory and
         # KY_SPECTRUM resets don't bleed across runs).
         function _qlnn_qe(; sat_rule::Int, alpha_zf::Real)
-            input_tglf = load_sample_input()
+            input_tglf = load_sample_input_cgyro()
             input_tjlf = InputTJLF{Float64}(input_tglf)
             input_tjlf.SAT_RULE = sat_rule
             input_tjlf.ALPHA_ZF = Float64(alpha_zf)
@@ -138,7 +138,7 @@ else
             # `warn_nn_train_bounds=false`. We can't predict exactly which
             # feature index will be RMIN_LOC, so we set every feature in turn
             # to the upper bound + 10·xσ — guaranteed to trigger.
-            input_tglf = load_sample_input()
+            input_tglf = load_sample_input_cgyro()
             bundle = TurbulentTransport.loadqlnnbundle(QLNN_BUNDLE_NAME)
             xnames = bundle.energy.xnames
             xbounds = bundle.energy.xbounds

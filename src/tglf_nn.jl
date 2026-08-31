@@ -591,6 +591,90 @@ function run_tglfnn(input_tglf::InputTGLF{T}; model_filename::String, uncertain:
     return run_tglfnn([input_tglf]; model_filename, uncertain, warn_nn_train_bounds, fidelity)[1]
 end
 
+#= ============================== =#
+#  radial blending of model variants
+#= ============================== =#
+
+# Switch points (in RMIN_LOC = r/a) at which the core net hands over to the
+# near-edge / edge nets. The training DBs for every family below use the same
+# radial windows (core 0.10-0.90, near-edge 0.68-0.94, edge 0.80-0.99), so the
+# switch points are shared.
+const _RADIAL_BLEND_NEAREDGE_RMIN = 0.881
+const _RADIAL_BLEND_EDGE_RMIN = 0.975
+
+# core model => (near-edge model, edge model, r_nearedge, r_edge)
+# Models listed here are evaluated per radial point: the core net for
+# RMIN_LOC < r_nearedge, the near-edge net for r_nearedge <= RMIN_LOC < r_edge and
+# the edge net for RMIN_LOC >= r_edge. Models not listed are used as-is.
+const _RADIAL_BLEND_VARIANTS = Dict{String,Tuple{String,String,Float64,Float64}}(
+    # DIII-D, positive + negative triangularity trained jointly
+    "sat0quench_em_d3d_azf+1_withnegD" => ("sat0quench_em_d3dnearedge_azf+1_withnegD", "sat0quench_em_d3dedge_azf+1_withnegD",
+        _RADIAL_BLEND_NEAREDGE_RMIN, _RADIAL_BLEND_EDGE_RMIN),
+    "sat1_em_d3d_azf-1_withnegD" => ("sat1_em_d3dnearedge_azf-1_withnegD", "sat1_em_d3dedge_azf-1_withnegD",
+        _RADIAL_BLEND_NEAREDGE_RMIN, _RADIAL_BLEND_EDGE_RMIN),
+    "sat2_em_d3d_azf-1_withnegD" => ("sat2_em_d3dnearedge_azf-1_withnegD", "sat2_em_d3dedge_azf-1_withnegD",
+        _RADIAL_BLEND_NEAREDGE_RMIN, _RADIAL_BLEND_EDGE_RMIN),
+    "sat3_em_d3d_azf-1_withnegD" => ("sat3_em_d3dnearedge_azf-1_withnegD", "sat3_em_d3dedge_azf-1_withnegD",
+        _RADIAL_BLEND_NEAREDGE_RMIN, _RADIAL_BLEND_EDGE_RMIN),
+    # spherical tokamaks (MAST-U + NSTX jointly, PT + NT)
+    "sat3_em_mastu+nstx_azf-1_withnegD" => ("sat3_em_mastunearedge+nstxnearedge_azf-1_withnegD", "sat3_em_mastuedge+nstxedge_azf-1_withnegD",
+        _RADIAL_BLEND_NEAREDGE_RMIN, _RADIAL_BLEND_EDGE_RMIN),
+)
+
+"""
+    radial_blend_variants(model_filename::String)
+
+Return `(nearedge_model, edge_model, r_nearedge, r_edge)` if `model_filename` is a core
+model with radial variants (see `_RADIAL_BLEND_VARIANTS`), otherwise `nothing`.
+"""
+radial_blend_variants(model_filename::String) = get(_RADIAL_BLEND_VARIANTS, model_filename, nothing)
+
+# Near-edge / edge masks over the columns of `x` for a variants tuple
+function _radial_blend_masks(x::AbstractMatrix, k_rminloc::Int, variants::Tuple)
+    _, _, r_nearedge, r_edge = variants
+    rmin = view(x, k_rminloc, :)
+    nearedge_mask = (rmin .>= r_nearedge) .& (rmin .< r_edge)
+    edge_mask = rmin .>= r_edge
+    return nearedge_mask, edge_mask
+end
+
+# Load the near-edge / edge nets of `variants` and check that their input/output
+# schemas match the core model (x columns and y rows are reused across the family)
+function _radial_blend_models(tglfmod::TGLFmodel, model_filename::String, variants::Tuple)
+    nearedge_base, edge_base = variants[1], variants[2]
+    mods = (loadmodelonce(nearedge_base), loadmodelonce(edge_base))
+    for (vmod, vname) in zip(mods, (nearedge_base, edge_base))
+        vmod.xnames == tglfmod.xnames || error("TGLF-NN radial blending: '$vname' xnames differ from '$model_filename'")
+        vmod.ynames == tglfmod.ynames || error("TGLF-NN radial blending: '$vname' ynames differ from '$model_filename'")
+    end
+    return mods
+end
+
+"""
+    _radial_blend!(y::AbstractMatrix, x::AbstractMatrix, tglfmod::TGLFmodel, model_filename::String; uncertain::Bool, warn_nn_train_bounds::Bool)
+
+Overwrite the columns of `y` whose `RMIN_LOC` falls in the near-edge / edge region with the
+prediction of the corresponding variant net. No-op for models outside `_RADIAL_BLEND_VARIANTS`.
+Mutates and returns `y`.
+"""
+function _radial_blend!(y::AbstractMatrix, x::AbstractMatrix, tglfmod::TGLFmodel, model_filename::String; uncertain::Bool, warn_nn_train_bounds::Bool)
+    variants = radial_blend_variants(model_filename)
+    variants === nothing && return y
+    k_rminloc = findfirst(isequal("RMIN_LOC"), tglfmod.xnames)
+    if k_rminloc === nothing
+        @warn "RMIN_LOC not found in xnames for radial-dependent model blending"
+        return y
+    end
+    masks = _radial_blend_masks(x, k_rminloc, variants)
+    any(any, masks) || return y
+    mods = _radial_blend_models(tglfmod, model_filename, variants)
+    for (mask, vmod) in zip(masks, mods)
+        any(mask) || continue
+        y[:, mask] .= flux_array(vmod, x[:, mask]; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
+    end
+    return y
+end
+
 """
     run_tglfnn(input_tglfs::Vector{InputTGLF{T}}; model_filename::String, uncertain::Bool=false, warn_nn_train_bounds::Bool, fidelity::Symbol=:TGLFNN) where {T<:Real}
 
@@ -624,34 +708,10 @@ Returns a vector of `flux_solution` structures
 
     tmp = flux_array(tglfmod, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
 
-    # Handle models with radial-dependent variants
-    k_rminloc = nothing
-    if model_filename in ("sat0quench_em_d3d_azf+1_withnegD", "sat1_em_d3d_azf-1_withnegD", "sat2_em_d3d_azf-1_withnegD", "sat3_em_d3d_azf-1_withnegD")
-        for (k, item) in enumerate(tglfmod.xnames)
-            if item == "RMIN_LOC"
-                k_rminloc = k
-                break
-            end
-        end
-
-        # For sat3_em_d3d_azf-1_withnegD + GKNN, blending is done in the GKNN block below
-        if model_filename != "sat3_em_d3d_azf-1_withnegD" || fidelity != :GKNN
-            if k_rminloc === nothing
-                @warn "RMIN_LOC not found in xnames for radial-dependent model blending"
-            else
-                tglfmod2 = loadmodelonce(replace(model_filename, "d3d" => "d3dnearedge"))
-                tglfmod3 = loadmodelonce(replace(model_filename, "d3d" => "d3dedge"))
-                tmp2 = flux_array(tglfmod2, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
-                tmp3 = flux_array(tglfmod3, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
-                for i in eachindex(input_tglfs)
-                    if inputs[k_rminloc, i] >= 0.881 && inputs[k_rminloc, i] < 0.975
-                        tmp[:, i] .= tmp2[:, i]
-                    elseif inputs[k_rminloc, i] >= 0.975
-                        tmp[:, i] .= tmp3[:, i]
-                    end
-                end
-            end
-        end
+    # Handle models with radial-dependent variants (see `_RADIAL_BLEND_VARIANTS`).
+    # For sat3_em_d3d_azf-1_withnegD + GKNN the blending is done in the GKNN block below.
+    if !(model_filename == "sat3_em_d3d_azf-1_withnegD" && fidelity == :GKNN)
+        _radial_blend!(tmp, inputs, tglfmod, model_filename; uncertain, warn_nn_train_bounds)
     end
     if fidelity == :GKNN
         supported_gknn_models = ("sat3_em_d3d_azf-1", "sat3_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d_azf-1_withnegD", "sat3_em_d3d_azf-1_gkdb", "sat2_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d+mastu_azf-1")
@@ -672,6 +732,8 @@ Returns a vector of `flux_solution` structures
         elseif model_filename == "sat3_em_d3d_azf-1_withnegD"
             gk_inputs = acquire_view!(pool, T, size(inputs, 1) + 4, size(inputs, 2))
             gk_inputs[1:end-4, :] = inputs
+            variants = radial_blend_variants(model_filename)
+            k_rminloc = findfirst(isequal("RMIN_LOC"), tglfmod.xnames)
             if k_rminloc === nothing
                 @warn "RMIN_LOC not found in xnames for GKNN edge blending"
                 gk_inputs[end-3:end, :] = tmp
@@ -680,8 +742,8 @@ Returns a vector of `flux_solution` structures
                 tmp .*= err
             else
                 # Load nearedge and edge base models
-                tglfmod2 = loadmodelonce(replace(model_filename, "d3d" => "d3dnearedge"))
-                tglfmod3 = loadmodelonce(replace(model_filename, "d3d" => "d3dedge"))
+                tglfmod2, tglfmod3 = _radial_blend_models(tglfmod, model_filename, variants)
+                nearedge_mask, edge_mask = _radial_blend_masks(inputs, k_rminloc, variants)
                 tmp2 = flux_array(tglfmod2, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
                 tmp3 = flux_array(tglfmod3, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
 
@@ -698,9 +760,9 @@ Returns a vector of `flux_solution` structures
                 err3 = flux_array(gknn37, gk_inputs; uncertain, warn_nn_train_bounds, fidelity)
 
                 for i in eachindex(input_tglfs)
-                    if inputs[k_rminloc, i] >= 0.881 && inputs[k_rminloc, i] < 0.975
+                    if nearedge_mask[i]
                         tmp[:, i] .= tmp2[:, i] .* err2[:, i]
-                    elseif inputs[k_rminloc, i] >= 0.975
+                    elseif edge_mask[i]
                         tmp[:, i] .= tmp3[:, i] .* err3[:, i]
                     else
                         tmp[:, i] .*= err1[:, i]
@@ -759,6 +821,11 @@ function run_tglfnn(data::Dict; model_filename::String, uncertain::Bool=false, w
     xnames = [replace(name, "_log10" => "") for name in tglfmod.xnames]
     x = collect(transpose(reduce(hcat, [Float64.(data[name]) for name in xnames])))
     y = tglfmod(x; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
+    # Handle models with radial-dependent variants (see `_RADIAL_BLEND_VARIANTS`).
+    # For sat3_em_d3d_azf-1_withnegD + GKNN the blending is done in the GKNN block below.
+    if !(model_filename == "sat3_em_d3d_azf-1_withnegD" && fidelity == :GKNN)
+        _radial_blend!(y, x, tglfmod, model_filename; uncertain, warn_nn_train_bounds)
+    end
     if fidelity == :GKNN
         supported_gknn_models = ("sat3_em_d3d_azf-1", "sat3_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d_azf-1_withnegD", "sat3_em_d3d_azf-1_gkdb", "sat2_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d+mastu_azf-1")
         if !(model_filename in supported_gknn_models)
@@ -778,6 +845,7 @@ function run_tglfnn(data::Dict; model_filename::String, uncertain::Bool=false, w
             err_i = gknni(vcat(x, y[4])...; uncertain, warn_nn_train_bounds, fidelity)
             y[4] .*= err_i
         elseif model_filename == "sat3_em_d3d_azf-1_withnegD"
+            variants = radial_blend_variants(model_filename)
             k_rminloc = findfirst(isequal("RMIN_LOC"), xnames)
             if k_rminloc === nothing
                 @warn "RMIN_LOC not found in xnames for GKNN edge blending"
@@ -785,8 +853,8 @@ function run_tglfnn(data::Dict; model_filename::String, uncertain::Bool=false, w
                 err = gknn31(vcat(x, y)...; uncertain, warn_nn_train_bounds, fidelity)
                 y .*= err
             else
-                tglfmod2 = loadmodelonce(replace(model_filename, "d3d" => "d3dnearedge"))
-                tglfmod3 = loadmodelonce(replace(model_filename, "d3d" => "d3dedge"))
+                tglfmod2, tglfmod3 = _radial_blend_models(tglfmod, model_filename, variants)
+                nearedge_mask, edge_mask = _radial_blend_masks(x, k_rminloc, variants)
                 y2 = flux_array(tglfmod2, x; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
                 y3 = flux_array(tglfmod3, x; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
 
@@ -797,9 +865,9 @@ function run_tglfnn(data::Dict; model_filename::String, uncertain::Bool=false, w
                 err3 = flux_array(gknn37, vcat(x, y3); uncertain, warn_nn_train_bounds, fidelity)
 
                 for i in axes(x, 2)
-                    if x[k_rminloc, i] >= 0.881 && x[k_rminloc, i] < 0.975
+                    if nearedge_mask[i]
                         y[:, i] .= y2[:, i] .* err2[:, i]
-                    elseif x[k_rminloc, i] >= 0.975
+                    elseif edge_mask[i]
                         y[:, i] .= y3[:, i] .* err3[:, i]
                     else
                         y[:, i] .*= err1[:, i]

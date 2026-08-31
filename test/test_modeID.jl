@@ -169,7 +169,7 @@ else
     import TJLF
 
     @testset "QLNN ModeID (run_modeid_qlnn)" begin
-        input_tglf = load_sample_input()
+        input_tglf = load_sample_input_cgyro()
         input_tjlf = InputTJLF{Float64}(input_tglf)
 
         @testset "single InputTJLF produces TJLFModeIdentification" begin
@@ -208,7 +208,7 @@ else
         end
 
         @testset "multiple InputTJLFs produce per-point results" begin
-            it2 = InputTJLF{Float64}(load_sample_input())
+            it2 = load_sample_input_tjlf()
             it2.RLTS[2] *= 1.5
             results = TurbulentTransport.run_modeid_qlnn([input_tjlf, it2]; bundle_name="QLNN")
             @test length(results) == 2
@@ -221,8 +221,8 @@ else
         end
 
         @testset "results are deterministic" begin
-            r1 = TurbulentTransport.run_modeid_qlnn([InputTJLF{Float64}(load_sample_input())]; bundle_name="QLNN")
-            r2 = TurbulentTransport.run_modeid_qlnn([InputTJLF{Float64}(load_sample_input())]; bundle_name="QLNN")
+            r1 = TurbulentTransport.run_modeid_qlnn([load_sample_input_tjlf()]; bundle_name="QLNN")
+            r2 = TurbulentTransport.run_modeid_qlnn([load_sample_input_tjlf()]; bundle_name="QLNN")
             @test r1[1].dominant_mode == r2[1].dominant_mode
             @test r1[1].dominant_mode_fraction ≈ r2[1].dominant_mode_fraction
             @test r1[1].mode_per_ky == r2[1].mode_per_ky
@@ -235,11 +235,11 @@ else
 
         @testset "classification thresholds affect mode assignment" begin
             r_default = TurbulentTransport.run_modeid_qlnn(
-                [InputTJLF{Float64}(load_sample_input())];
+                [load_sample_input_tjlf()];
                 bundle_name="QLNN", em_threshold=0.5, ion_electron_threshold=0.5)
 
             r_strict_em = TurbulentTransport.run_modeid_qlnn(
-                [InputTJLF{Float64}(load_sample_input())];
+                [load_sample_input_tjlf()];
                 bundle_name="QLNN", em_threshold=0.01, ion_electron_threshold=0.5)
 
             @test r_default[1] isa TurbulentTransport.TJLFModeIdentification

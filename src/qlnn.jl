@@ -24,6 +24,12 @@ import LinearAlgebra: BLAS
 # training time). These are also the ordering TJLF expects when packing
 # QL_weights for `sum_ky_spectrum` (electrons first; matches `get_sat_params`).
 const _QLNN_SPECIES = ("e", "D", "C")
+# Alternative canonical species set: D+T lumped into one hydrogenic species and a
+# lumped high-Z impurity (ukstep26_2 QLNN heads). Positionally identical to the
+# (e, D, C) set for TJLF packing — slot 2 = main ion, slot 3 = impurity — so a
+# bundle must use exactly one of the two sets.
+const _QLNN_SPECIES_DT = ("e", "DT", "imp")
+const _QLNN_SPECIES_SETS = (_QLNN_SPECIES, _QLNN_SPECIES_DT)
 const _QLNN_FIELDS = ("phi", "apar", "bpar")  # bpar is optional (drop_bpar=true)
 
 
@@ -939,14 +945,20 @@ function _qlnn_parse_qlweight_ynames(ynames::Vector{String})
         error("QLNN bundle has unsupported field(s) $(collect(bad_fields)) in ynames; " *
               "expected a subset of $(_QLNN_FIELDS).")
     end
-    bad_species = setdiff(unique(species), _QLNN_SPECIES)
-    if !isempty(bad_species)
-        error("QLNN bundle has unsupported species $(collect(bad_species)) in ynames; " *
-              "expected a subset of $(_QLNN_SPECIES).")
+    species_tuple = nothing
+    for cand in _QLNN_SPECIES_SETS
+        if isempty(setdiff(unique(species), cand))
+            species_tuple = cand
+            break
+        end
+    end
+    if species_tuple === nothing
+        error("QLNN bundle has unsupported species $(collect(unique(species))) in ynames; " *
+              "expected a subset of one of $(_QLNN_SPECIES_SETS).")
     end
     # Pin field order to canonical (phi, apar, bpar) so SAT params match TJLF.
     sort!(field_set; by=f -> findfirst(==(f), _QLNN_FIELDS)::Int)
-    species_set = collect(_QLNN_SPECIES)
+    species_set = collect(species_tuple)
     # Index rows by canonical field position (not position within this head's own
     # subset): heads trained with drop_bpar (all-zero bpar rows removed from the
     # DB, e.g. the d3d energy/momentum heads) see only (phi, apar), and the QL
@@ -1727,12 +1739,12 @@ function qlnn_fluctuation_spectra(input_tjlf::TJLF.InputTJLF{T}, bundle::QLNNbun
 end
 
 function qlnn_fluctuation_spectra(input_tglf::TJLF.InputTGLF; kw...)
-    input_tjlf = TJLF.InputTJLF{Float64}(input_tglf)
+    input_tjlf = to_input_tjlf(input_tglf)
     return qlnn_fluctuation_spectra(input_tjlf; kw...)
 end
 
 function qlnn_fluctuation_spectra(input_tglfs::Vector{TJLF.InputTGLF{T}}; kw...) where {T<:Real}
-    input_tjlfs = TJLF.InputTJLF{T}[TJLF.InputTJLF{T}(it) for it in input_tglfs]
+    input_tjlfs = TJLF.InputTJLF{T}[to_input_tjlf(it) for it in input_tglfs]
     return qlnn_fluctuation_spectra(input_tjlfs; kw...)
 end
 
@@ -1773,7 +1785,7 @@ end
 # because the caller is typically `ActorTGLF._step`, which already maintains
 # a Vector{InputTJLF} for `:QLNN` so width memory survives across iterations.
 function run_qlnn(input_tglfs::Vector{TJLF.InputTGLF{T}}; kw...) where {T<:Real}
-    input_tjlfs = TJLF.InputTJLF{T}[TJLF.InputTJLF{T}(it) for it in input_tglfs]
+    input_tjlfs = TJLF.InputTJLF{T}[to_input_tjlf(it) for it in input_tglfs]
     return run_qlnn(input_tjlfs; kw...)
 end
 
