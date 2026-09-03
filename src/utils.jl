@@ -221,3 +221,12 @@ function parse_out_tglf_gbflux(lines::String; outnames::NTuple{4,String}=("Gam/G
     end
     return out
 end
+
+"""
+    save(input::InputTJLF, filename::AbstractString)
+
+Write an InputTJLF to file (forwards to `TJLF.save`), so callers that hold either an
+InputTGLF or an InputTJLF (e.g. ActorTGLF with model=:TJLF / :QLNN) can use a single
+`TurbulentTransport.save` entry point.
+"""
+save(input::InputTJLF, filename::AbstractString) = TJLF.save(input, filename)
