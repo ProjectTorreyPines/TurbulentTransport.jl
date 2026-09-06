@@ -2,13 +2,18 @@
 
 The script `convert_nn_onnx_to_pytorch_trace.py` takes multiple ONNX model files and combines them into a single PyTorch traced model, saving the model to `committee.pt`. The combined model is scaled according to `xm.txt`, `xsigma.txt`, `ym.txt` and `ysigma.txt`, so that the inputs and outputs correspond to those used in TGLF. The model file `committee.pt` can then be used in PyTorch, or in Fortran via [FTorch](https://github.com/Cambridge-ICCS/FTorch).
 
-The traced model requires 1 input array that contains the inputs as in `xnames.txt` (model dependent length) and outputs 2 arrays (prediction and variance) of length 4, corresponding to the names in `ynames.txt`.
+The traced model takes one input array with the features in `xnames.txt` (model-dependent length) and returns two arrays (mean and variance) of length 4, corresponding to the names in `ynames.txt`. The first dimension is batch: a single point is shape `(1, n_in)`, a profile is `(n, n_in)`. See [Batching](#batching).
 
 ## Running the Script
 
 The `convert_nn_onnx_to_pytorch_trace.py` script combines all `.onnx` files in the local directory into `committee.pt`. Given the prerequisites below, you can run the script from a model directory (e.g. from `models/sat3_em_nstx_azf-1/`):
 ```bash
 python ../../utilities/convert_nn_onnx_to_pytorch_trace.py
+```
+
+By default this also checks the conversion against ONNX Runtime (see [Verification](#verification)). To skip that check (and the optional `onnxruntime` dependency):
+```bash
+python ../../utilities/convert_nn_onnx_to_pytorch_trace.py --no-verify
 ```
 
 For residual models (e.g. `models/sat3_em_d3d+mastu+nstx_azf-1_gknn31/`) it is necessary to first run the script in the parent model directory since the parent `committee.pt` is required in conversion.
@@ -18,9 +23,14 @@ For residual models (e.g. `models/sat3_em_d3d+mastu+nstx_azf-1_gknn31/`) it is n
 Ensure the following dependencies are installed in your Python environment:
 
 - Python 3.8+
+- `onnx` (to load the member graphs)
 - `onnx2pytorch` (for converting ONNX to PyTorch)
 - `torch` and `torchvision` (PyTorch for model manipulation and tracing)
 - `numpy` (for handling the input scaling file)
+
+Optional, used only for the post-trace check:
+
+- `onnxruntime` (ONNX Runtime). Not required to write `committee.pt`. If it is not installed, pass `--no-verify`.
 
 Note that one can also use the python installation of `torch` for FTorch in Fortran. For use on CPU, it is suggested to first install
 compatible `torch` and `torchvision` with
@@ -28,7 +38,22 @@ compatible `torch` and `torchvision` with
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 
 ```
-then install `onnx2pytorch` afterwards.
+then install `onnx2pytorch` afterwards. Install `onnxruntime` the same way if you want the verification.
+
+### Verification
+
+The `.onnx` files are the export snapshot. The script does not go back to Julia/Flux; it only needs to show that `ConvertModel`, the committee wrap, and `torch.jit.trace` match that snapshot.
+
+Unless `--no-verify` is passed, it:
+
+1. Runs each member through ONNX Runtime and through the converted PyTorch module, on `xm` plus a few Gaussian samples around it (`--n-random`, default 8).
+2. Composes those ONNX outputs into committee mean and variance (and, for residual models, the parent members the same way).
+3. Checks the eager committee against that composition.
+4. Traces, then checks the traced module against the same ONNX composition and against eager.
+
+Tolerances default to `1e-4` (`--atol`, `--rtol`). A mismatch exits before `committee.pt` is written.
+
+`onnxruntime` is an optional dependency: it is imported only for these checks. Skip them with `--no-verify` if it is not installed or if you only want to produce the trace.
 
 ### Notes
 
@@ -37,9 +62,17 @@ then install `onnx2pytorch` afterwards.
 - If there are issues with `onnx2pytorch`, it might be replaced with [`onnx2torch`](https://github.com/ENOT-AutoDL/onnx2torch)
  and its method `convert()` in place of `ConvertModel()`.
 
+## Batching
+
+The Fortran example below is a **single-batch** call: tensors of shape `(1, n_in)` and `(1, 4)`, one physical point per `run_model`. That matches a scalar evaluate.
+
+The traces are not limited to `n = 1`. They take a leading batch dimension `(n, n_in)` and return mean and variance each `(n, 4)`. A single row pays a large dispatcher cost (about 1 ms for a regular 20-member committee). Independent points — a radial profile, a grid — are much cheaper per point if they go in one call: 16 rows of the same net are only about 1.5 ms total, so looping 16 scalar evaluates is roughly ten times more expensive. Residual traces behave the same way at about 2.4× those times.
+
+If the host already holds a vector of states, pass them as one `(n, n_in)` array rather than looping the single-row example.
+
 ## Using the PyTorch traced model in Fortran
 
-The traced PyTorch model (`committee.pt`) can be used in Fortran with [FTorch](https://github.com/torch/FTorch), which provides Fortran bindings for LibTorch (the C++ backend of PyTorch).
+The traced PyTorch model (`committee.pt`) can be used in Fortran with [FTorch](https://github.com/torch/FTorch), which provides Fortran bindings for LibTorch (the C++ backend of PyTorch). The listing below is the single-batch case (`n = 1`); see [Batching](#batching) if you have more than one point.
 
 ### Prerequisites
 
@@ -71,15 +104,16 @@ module tglf_torchscript
   type(torch_model), save :: model
 
   ! Tensors to use in torch
-  ! models require 1 array of inputs per evaluation (n_in = 1)
-  ! models output both mean and variance (n_out = 2)
+  ! n_in / n_out are FTorch tensor counts, not batch size:
+  ! one input array per call, two outputs (mean and variance).
   integer, parameter :: n_in = 1, n_out = 2
   type(torch_tensor), dimension(n_in),  save :: input_tensor
   type(torch_tensor), dimension(n_out), save :: output_tensor
 
   ! Arrays to use in Fortran (input_array, output_mean, output_var)
-  ! Note that we need to use 2D arrays that are of shape (1,:) to conform with
-  ! the traced model.
+  ! First index is batch. This example uses n = 1, so shape (1,:).
+  ! The trace accepts (n, n_in); a profile of points in one call is
+  ! much cheaper per point than looping this scalar path.
   integer, parameter :: in_dims = 2     ! dimensions
   integer :: layout(in_dims) = [1,2] ! array dimension ordering
   real (wp), allocatable, dimension(:,:), target :: input_array
@@ -103,7 +137,9 @@ module tglf_torchscript
       call torch_model_load(model, "committee.pt", torch_kCPU)
 
       ! Allocate input and output arrays
-      allocate(input_array(1,input_size))
+      ! First dim = 1 is a single point. For a profile, use (n, input_size)
+      ! / (n, output_size) and rebuild the tensors once for that n.
+      allocate(input_array(1,input_size)) ! single batch
       allocate(output_mean(1,output_size), output_var(1,output_size))
 
       ! Set up pointers to inputs and outputs
@@ -120,7 +156,8 @@ module tglf_torchscript
       real, dimension(:), intent(in)  :: input
       real, dimension(:), intent(out) :: output
 
-      ! Copy inputs
+      ! Copy one point into row 1. Looping this is the slow path;
+      ! pass a rank-2 (n, n_in) array instead if you have many points.
       input_array(1,:) = input
 
       ! Call traced model
@@ -148,8 +185,8 @@ program call_tglf_torchscript
   real, allocatable, dimension(:) :: model_input  ! Need not be single
   real, allocatable, dimension(:) :: model_output ! precision reals.
 
-  allocate(model_input(in_size))
-  allocate(model_output(4))      ! 4 Fluxes returned
+  allocate(model_input(in_size))  ! single point
+  allocate(model_output(4))       ! 4 Fluxes returned
 
   call setup_model(in_size)
 
