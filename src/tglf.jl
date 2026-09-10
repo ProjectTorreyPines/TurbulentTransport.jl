@@ -159,7 +159,12 @@ function InputTGLF(
     mach = @. @views Rmaj[gridpoint_cp] * w0[gridpoint_cp] / c_s
     input_tglf.VPAR_1 = @. -input_tglf.SIGN_IT * mach
     input_tglf.VPAR_SHEAR_1 = @. -input_tglf.SIGN_IT * (a / c_s) * gamma_p
-    input_tglf.VEXB_SHEAR = @. -gamma_e * (a / c_s)
+    # TGYRO/locpargen convention (tgyro_tglf_map.f90:197): VEXB_SHEAR = -SIGN_BT*gamma_e*a/c_s,
+    # i.e. VEXB_SHEAR == VPAR_SHEAR_1*r/(|q|R) with the same sign as VPAR_SHEAR_1. gamma_e above
+    # carries the signed q, so the SIGN_BT factor is what makes it |q|-based. Models trained
+    # on the previous (SIGN_BT-free) form are tagged `vexb_convention = :legacy` and receive
+    # VEXB_SHEAR*SIGN_BT at inference (see `_default_vexb_convention`).
+    input_tglf.VEXB_SHEAR = @. -input_tglf.SIGN_BT * gamma_e * (a / c_s)
 
     for iion in eachindex(ions)
         species = iion + 1

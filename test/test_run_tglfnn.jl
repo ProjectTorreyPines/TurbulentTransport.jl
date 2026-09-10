@@ -342,6 +342,8 @@ end
         tglfmod = TurbulentTransport.loadmodelonce(model_name)
         xnames = [replace(name, "_log10" => "") for name in tglfmod.xnames]
         data = Dict(name => [Float64(getproperty(it, Symbol(name))) for it in inputs] for name in xnames)
+        # SIGN_BT lets the Dict path apply the same VEXB_SHEAR convention flip as the InputTGLF path
+        data["SIGN_BT"] = [Float64(it.SIGN_BT) for it in inputs]
         ydict = TurbulentTransport.run_tglfnn(data; model_filename=model_name, warn_nn_train_bounds=false)
         for (k, (_, variant)) in enumerate(regions)
             direct = TurbulentTransport.run_tglfnn(inputs[k]; model_filename=variant, warn_nn_train_bounds=false)

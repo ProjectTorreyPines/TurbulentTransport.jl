@@ -16,6 +16,7 @@ struct ModeIDmodel
     xm::Vector{Float32}
     xσ::Vector{Float32}
     xbounds::Array{Float32}
+    vexb_convention::Symbol   # :tgyro | :legacy, see `_default_vexb_convention`
 end
 
 struct ModeIDensemble
@@ -43,8 +44,11 @@ function Base.getproperty(ensemble::ModeIDensemble, field::Symbol)
     end
 end
 
-function _dict2modeid(dict::AbstractDict)
+function _dict2modeid(dict::AbstractDict; model_basename::AbstractString="")
     fluxmodel = Flux.fmap(Flux.f32, dict[:fluxmodel])
+    vexb_convention = haskey(dict, :vexb_convention) ?
+        _validate_vexb_convention(dict[:vexb_convention], "_dict2modeid($model_basename)") :
+        _default_vexb_convention(model_basename)
     return ModeIDmodel(
         fluxmodel,
         String(dict[:name]),
@@ -53,13 +57,14 @@ function _dict2modeid(dict::AbstractDict)
         String.(dict[:ynames]),
         Float32.(vec(dict[:xm])),
         Float32.(vec(dict[:xσ])),
-        Float32.(dict[:xbounds])
+        Float32.(dict[:xbounds]),
+        vexb_convention
     )
 end
 
-function _dict2modeid_ensemble(dict::Dict)
+function _dict2modeid_ensemble(dict::Dict; model_basename::AbstractString="")
     # sorted key order: deterministic member order across Julia versions (Dict iteration order changed in 1.13)
-    return ModeIDensemble([_dict2modeid(dict[k]) for k in sort!(collect(keys(dict)))])
+    return ModeIDensemble([_dict2modeid(dict[k]; model_basename) for k in sort!(collect(keys(dict)))])
 end
 
 """
@@ -74,10 +79,11 @@ single `ModeIDmodel`.
 function load_modeid_model(filename::AbstractString)
     fullpath = resolve_model_path(filename; extensions=[".bson"])
     savedict = BSON.load(fullpath, @__MODULE__)
+    model_basename = _model_basename(fullpath)
     if typeof(first(keys(savedict))) <: Integer
-        return _dict2modeid_ensemble(savedict)
+        return _dict2modeid_ensemble(savedict; model_basename)
     else
-        return _dict2modeid(savedict)
+        return _dict2modeid(savedict; model_basename)
     end
 end
 
@@ -205,6 +211,9 @@ function run_modeid_nn(dd::IMAS.dd, rho_transport::AbstractVector{<:Real};
                 val = getfield(it, Symbol(xname))
                 if TJLF.is_unset(val)
                     error("ModeID input field '$xname' is unset (missing/NaN) at rho=$rho")
+                end
+                if xname == "VEXB_SHEAR" && modeid_model.vexb_convention === :legacy
+                    val = val * vexb_sign(it)   # legacy VEXB_SHEAR = SIGN_BT * TGYRO VEXB_SHEAR
                 end
                 inputs[j, i] = Float32(val)
             end

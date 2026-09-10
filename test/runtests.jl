@@ -26,6 +26,7 @@ else
     include("test_readonly_cache.jl")
     include("test_flux_array.jl")
     include("test_run_tglfnn.jl")
+    include("test_vexb_convention.jl")
     include("test_finn.jl")
     include("test_modeID.jl")
     include("test_utils.jl")

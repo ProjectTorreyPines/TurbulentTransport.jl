@@ -29,6 +29,10 @@ struct TGLFNNmodel <: TGLFmodel
     xbounds::Array{Float64}
     ybounds::Array{Float64}
     nions::Int
+    # Sign convention of the VEXB_SHEAR training feature: `:tgyro` or `:legacy`
+    # (see `_default_vexb_convention`). Serialized when present; defaulted from the
+    # model file name when loading older BSONs.
+    vexb_convention::Symbol
 
     # Pre-initialized PooledChain for zero-allocation inference (not serialized)
     _pooled_chain::PooledChain
@@ -191,7 +195,7 @@ Memoize.@memoize function loadmodelonce(filename::String)
     return loadmodel(filename)
 end
 
-function dict2mod(savedict::AbstractDict)
+function dict2mod(savedict::AbstractDict; model_basename::AbstractString="")
     args = []
     for name in fieldnames(TGLFNNmodel)
         if name == :fluxmodel
@@ -200,6 +204,13 @@ function dict2mod(savedict::AbstractDict)
         elseif name == :nions
             nions = maximum(map(m -> parse(Int, m[1]), filter(!isnothing, match.(r"_([0-9]+$)", savedict[:xnames])))) - 1
             push!(args, nions)
+        elseif name === :vexb_convention
+            # optional key (written by trainers >= 2026-09); older files fall back to the table
+            if haskey(savedict, name)
+                push!(args, _validate_vexb_convention(savedict[name], "dict2mod($model_basename)"))
+            else
+                push!(args, _default_vexb_convention(model_basename))
+            end
         elseif name === :_pooled_chain
             push!(args, PooledChain(poolify(savedict[:fluxmodel])))
         else
@@ -209,20 +220,21 @@ function dict2mod(savedict::AbstractDict)
     return TGLFNNmodel(args...)
 end
 
-function dict2ens(dict::Dict)
+function dict2ens(dict::Dict; model_basename::AbstractString="")
     # Iterate in sorted key order so ensemble member order (and hence `models[1]`) is
     # deterministic. Dict iteration order depends on the hash implementation and changed
     # between Julia 1.12 and 1.13, which silently reordered members and broke regression pins.
-    return TGLFNNensemble([dict2mod(dict[k]) for k in sort!(collect(keys(dict)))])
+    return TGLFNNensemble([dict2mod(dict[k]; model_basename) for k in sort!(collect(keys(dict)))])
 end
 
 function loadmodel(filename::AbstractString)
     fullpath = resolve_model_path(filename; extensions=[".bson"])
     savedict = BSON.load(fullpath, @__MODULE__)
+    model_basename = _model_basename(fullpath)
     if typeof(first(keys(savedict))) <: Integer
-        return dict2ens(savedict)
+        return dict2ens(savedict; model_basename)
     else
-        return dict2mod(savedict)
+        return dict2mod(savedict; model_basename)
     end
 end
 
@@ -660,7 +672,7 @@ Overwrite the columns of `y` whose `RMIN_LOC` falls in the near-edge / edge regi
 prediction of the corresponding variant net. No-op for models outside `_RADIAL_BLEND_VARIANTS`.
 Mutates and returns `y`.
 """
-function _radial_blend!(y::AbstractMatrix, x::AbstractMatrix, tglfmod::TGLFmodel, model_filename::String; uncertain::Bool, warn_nn_train_bounds::Bool)
+function _radial_blend!(y::AbstractMatrix, x::AbstractMatrix, x_legacy::AbstractMatrix, tglfmod::TGLFmodel, model_filename::String; uncertain::Bool, warn_nn_train_bounds::Bool)
     variants = radial_blend_variants(model_filename)
     variants === nothing && return y
     k_rminloc = findfirst(isequal("RMIN_LOC"), tglfmod.xnames)
@@ -673,9 +685,33 @@ function _radial_blend!(y::AbstractMatrix, x::AbstractMatrix, tglfmod::TGLFmodel
     mods = _radial_blend_models(tglfmod, model_filename, variants)
     for (mask, vmod) in zip(masks, mods)
         any(mask) || continue
-        y[:, mask] .= flux_array(vmod, x[:, mask]; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
+        xv = _vexb_input(vmod, x, x_legacy)
+        y[:, mask] .= flux_array(vmod, xv[:, mask]; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
     end
     return y
+end
+
+#= ============================== =#
+#  VEXB_SHEAR sign-convention flip
+#= ============================== =#
+# `x` holds the extracted features in the TGYRO convention (what `InputTGLF(dd, ...)`
+# and plain input.tglf files carry). A model tagged `:legacy` was trained on
+# SIGN_BT * VEXB_SHEAR, so it receives `x_legacy`, a copy of `x` whose VEXB_SHEAR row is
+# multiplied per sample by SIGN_BT. The flip is applied exactly once, at the entry
+# points of `run_tglfnn`; `flux_array` itself assumes `x` is already in the model's
+# convention (needed because GKNN correction nets and radial-blend variants of
+# different conventions share one extracted matrix).
+@inline _vexb_input(m::TGLFmodel, x, x_legacy) = m.vexb_convention === :legacy ? x_legacy : x
+
+_vexb_row(xnames::AbstractVector{String}) = findfirst(isequal("VEXB_SHEAR"), xnames)
+
+# Multiply row `k` of `x` by `signbt[j]` per column, into `dest` (dest may alias a fresh buffer)
+function _flip_vexb_row!(dest::AbstractMatrix, x::AbstractMatrix, k::Int, signbt::AbstractVector{Int})
+    dest === x || copyto!(dest, x)
+    @inbounds for j in axes(dest, 2)
+        dest[k, j] = dest[k, j] * signbt[j]
+    end
+    return dest
 end
 
 """
@@ -688,6 +724,10 @@ This is more efficient than running TGLFNN on each individual InputTGLFs.
 If the model is an ensemble of NNs, then the output can be uncertain (using the Measurements.jl package).
 
 The warn_nn_train_bounds checks against the standard deviation of the inputs to warn if evaluation is likely outside of training bounds.
+
+`VEXB_SHEAR` is taken in the TGYRO convention (as written by `InputTGLF(dd, ...)`); models
+tagged `vexb_convention == :legacy` receive `SIGN_BT * VEXB_SHEAR` (see README, "VEXB_SHEAR
+sign conventions").
 
 Returns a vector of `flux_solution` structures
 """
@@ -709,12 +749,23 @@ Returns a vector of `flux_solution` structures
     xnames_val = _get_xnames_without_log10_suffix(tglfmod)
     _extract_all_inputs!(inputs, input_tglfs, xnames_val)
 
-    tmp = flux_array(tglfmod, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
+    # Legacy-convention copy of the inputs (VEXB_SHEAR row * SIGN_BT); aliases `inputs`
+    # when no sample has SIGN_BT = -1 or the model has no VEXB_SHEAR feature.
+    k_vexb = _vexb_row(tglfmod.xnames)
+    signbt = Int[vexb_sign(it) for it in input_tglfs]
+    if k_vexb !== nothing && any(==(-1), signbt)
+        inputs_legacy = acquire_view!(pool, T, size(inputs, 1), size(inputs, 2))
+        _flip_vexb_row!(inputs_legacy, inputs, k_vexb, signbt)
+    else
+        inputs_legacy = inputs
+    end
+
+    tmp = flux_array(tglfmod, _vexb_input(tglfmod, inputs, inputs_legacy); uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
 
     # Handle models with radial-dependent variants (see `_RADIAL_BLEND_VARIANTS`).
     # For sat3_em_d3d_azf-1_withnegD + GKNN the blending is done in the GKNN block below.
     if !(model_filename == "sat3_em_d3d_azf-1_withnegD" && fidelity == :GKNN)
-        _radial_blend!(tmp, inputs, tglfmod, model_filename; uncertain, warn_nn_train_bounds)
+        _radial_blend!(tmp, inputs, inputs_legacy, tglfmod, model_filename; uncertain, warn_nn_train_bounds)
     end
     if fidelity == :GKNN
         supported_gknn_models = ("sat3_em_d3d_azf-1", "sat3_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d_azf-1_withnegD", "sat3_em_d3d_azf-1_gkdb", "sat2_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d+mastu_azf-1")
@@ -724,39 +775,41 @@ Returns a vector of `flux_solution` structures
 
         if model_filename == "sat3_em_d3d_azf-1"
             gk_inputs = acquire_view!(pool, T, size(inputs, 1) + 1, size(inputs, 2))
-            gk_inputs[1:end-1, :] = inputs
 
             for (i, postfix) in enumerate(("_gknng24", "_gknnp24", "_gknne24", "_gknni24"))
-                gk_inputs[end, :] = tmp[i, :]
                 gknn_model = loadmodelonce(model_filename * postfix)
+                gk_inputs[1:end-1, :] = _vexb_input(gknn_model, inputs, inputs_legacy)
+                gk_inputs[end, :] = tmp[i, :]
                 err = flux_array(gknn_model, gk_inputs; uncertain, warn_nn_train_bounds, fidelity)[:]
                 tmp[i, :] .*= err
             end
         elseif model_filename == "sat3_em_d3d_azf-1_withnegD"
             gk_inputs = acquire_view!(pool, T, size(inputs, 1) + 4, size(inputs, 2))
-            gk_inputs[1:end-4, :] = inputs
             variants = radial_blend_variants(model_filename)
             k_rminloc = findfirst(isequal("RMIN_LOC"), tglfmod.xnames)
             if k_rminloc === nothing
                 @warn "RMIN_LOC not found in xnames for GKNN edge blending"
-                gk_inputs[end-3:end, :] = tmp
                 gknn31 = loadmodelonce(model_filename * "_gknn31")
+                gk_inputs[1:end-4, :] = _vexb_input(gknn31, inputs, inputs_legacy)
+                gk_inputs[end-3:end, :] = tmp
                 err = flux_array(gknn31, gk_inputs; uncertain, warn_nn_train_bounds, fidelity)
                 tmp .*= err
             else
                 # Load nearedge and edge base models
                 tglfmod2, tglfmod3 = _radial_blend_models(tglfmod, model_filename, variants)
                 nearedge_mask, edge_mask = _radial_blend_masks(inputs, k_rminloc, variants)
-                tmp2 = flux_array(tglfmod2, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
-                tmp3 = flux_array(tglfmod3, inputs; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
+                tmp2 = flux_array(tglfmod2, _vexb_input(tglfmod2, inputs, inputs_legacy); uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
+                tmp3 = flux_array(tglfmod3, _vexb_input(tglfmod3, inputs, inputs_legacy); uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
 
                 # Core region (RMIN_LOC < 0.881): _gknn31 applied to d3d flux
                 gknn31 = loadmodelonce(model_filename * "_gknn31")
+                gk_inputs[1:end-4, :] = _vexb_input(gknn31, inputs, inputs_legacy)
                 gk_inputs[end-3:end, :] = tmp
                 err1 = flux_array(gknn31, gk_inputs; uncertain, warn_nn_train_bounds, fidelity)
 
                 # Near-edge and edge regions: _gknn37 applied to nearedge/edge flux
                 gknn37 = loadmodelonce(model_filename * "_gknn37")
+                gk_inputs[1:end-4, :] = _vexb_input(gknn37, inputs, inputs_legacy)
                 gk_inputs[end-3:end, :] = tmp2
                 err2 = flux_array(gknn37, gk_inputs; uncertain, warn_nn_train_bounds, fidelity)
                 gk_inputs[end-3:end, :] = tmp3
@@ -774,24 +827,25 @@ Returns a vector of `flux_solution` structures
             end
         elseif model_filename in ("sat3_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d_azf-1_gkdb", "sat2_em_d3d+mastu+nstx_azf-1")
             gk_inputs = acquire_view!(pool, T, size(inputs, 1) + 4, size(inputs, 2))
-            gk_inputs[1:end-4, :] = inputs
+            gknn = loadmodelonce(model_filename * "_gknn31")
+            gk_inputs[1:end-4, :] = _vexb_input(gknn, inputs, inputs_legacy)
             gk_inputs[end-3:end, :] = tmp
 
-            gknn = loadmodelonce(model_filename * "_gknn31")
             err = flux_array(gknn, gk_inputs; uncertain, warn_nn_train_bounds, fidelity)
             tmp .*= err
             if model_filename == "sat3_em_d3d_azf-1_gkdb"
-                gk_inputs[end-3:end, :] = tmp
                 gkdb = loadmodelonce(model_filename * "_gknn31_cgyro")
+                gk_inputs[1:end-4, :] = _vexb_input(gkdb, inputs, inputs_legacy)
+                gk_inputs[end-3:end, :] = tmp
                 gkdb_err = flux_array(gkdb, gk_inputs; uncertain, warn_nn_train_bounds, fidelity)
                 tmp .*= gkdb_err
             end
         elseif model_filename == "sat3_em_d3d+mastu_azf-1"
             gk_inputs = acquire_view!(pool, T, size(inputs, 1) + 4, size(inputs, 2))
-            gk_inputs[1:end-4, :] = inputs
+            gknn = loadmodelonce(model_filename * "_gknn36")
+            gk_inputs[1:end-4, :] = _vexb_input(gknn, inputs, inputs_legacy)
             gk_inputs[end-3:end, :] = tmp
 
-            gknn = loadmodelonce(model_filename * "_gknn36")
             err = flux_array(gknn, gk_inputs; uncertain, warn_nn_train_bounds, fidelity)
             tmp .*= err
         end
@@ -823,11 +877,20 @@ function run_tglfnn(data::Dict; model_filename::String, uncertain::Bool=false, w
     end
     xnames = [replace(name, "_log10" => "") for name in tglfmod.xnames]
     x = collect(transpose(reduce(hcat, [Float64.(data[name]) for name in xnames])))
-    y = tglfmod(x; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
+    # Legacy-convention copy (VEXB_SHEAR * SIGN_BT). Without a "SIGN_BT" entry the
+    # dictionary is taken to be already in the model's convention (no flip).
+    k_vexb = _vexb_row(tglfmod.xnames)
+    if k_vexb !== nothing && haskey(data, "SIGN_BT")
+        signbt = Int[Int(round(s)) for s in data["SIGN_BT"]]
+        x_legacy = any(==(-1), signbt) ? _flip_vexb_row!(similar(x), x, k_vexb, signbt) : x
+    else
+        x_legacy = x
+    end
+    y = tglfmod(_vexb_input(tglfmod, x, x_legacy); uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
     # Handle models with radial-dependent variants (see `_RADIAL_BLEND_VARIANTS`).
     # For sat3_em_d3d_azf-1_withnegD + GKNN the blending is done in the GKNN block below.
     if !(model_filename == "sat3_em_d3d_azf-1_withnegD" && fidelity == :GKNN)
-        _radial_blend!(y, x, tglfmod, model_filename; uncertain, warn_nn_train_bounds)
+        _radial_blend!(y, x, x_legacy, tglfmod, model_filename; uncertain, warn_nn_train_bounds)
     end
     if fidelity == :GKNN
         supported_gknn_models = ("sat3_em_d3d_azf-1", "sat3_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d_azf-1_withnegD", "sat3_em_d3d_azf-1_gkdb", "sat2_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d+mastu_azf-1")
@@ -836,16 +899,16 @@ function run_tglfnn(data::Dict; model_filename::String, uncertain::Bool=false, w
         end
         if model_filename == "sat3_em_d3d_azf-1"
             gknng = loadmodelonce(model_filename * "_gknng24")
-            err_g = gknng(vcat(x, y[1])...; uncertain, warn_nn_train_bounds, fidelity)
+            err_g = gknng(vcat(_vexb_input(gknng, x, x_legacy), y[1])...; uncertain, warn_nn_train_bounds, fidelity)
             y[1] .*= err_g
             gknnp = loadmodelonce(model_filename * "_gknnp24")
-            err_p = gknnp(vcat(x, y[2])...; uncertain, warn_nn_train_bounds, fidelity)
+            err_p = gknnp(vcat(_vexb_input(gknnp, x, x_legacy), y[2])...; uncertain, warn_nn_train_bounds, fidelity)
             y[2] .*= err_p
             gknne = loadmodelonce(model_filename * "_gknne24")
-            err_e = gknne(vcat(x, y[3])...; uncertain, warn_nn_train_bounds, fidelity)
+            err_e = gknne(vcat(_vexb_input(gknne, x, x_legacy), y[3])...; uncertain, warn_nn_train_bounds, fidelity)
             y[3] .*= err_e
             gknni = loadmodelonce(model_filename * "_gknni24")
-            err_i = gknni(vcat(x, y[4])...; uncertain, warn_nn_train_bounds, fidelity)
+            err_i = gknni(vcat(_vexb_input(gknni, x, x_legacy), y[4])...; uncertain, warn_nn_train_bounds, fidelity)
             y[4] .*= err_i
         elseif model_filename == "sat3_em_d3d_azf-1_withnegD"
             variants = radial_blend_variants(model_filename)
@@ -853,19 +916,21 @@ function run_tglfnn(data::Dict; model_filename::String, uncertain::Bool=false, w
             if k_rminloc === nothing
                 @warn "RMIN_LOC not found in xnames for GKNN edge blending"
                 gknn31 = loadmodelonce(model_filename * "_gknn31")
-                err = gknn31(vcat(x, y)...; uncertain, warn_nn_train_bounds, fidelity)
+                err = gknn31(vcat(_vexb_input(gknn31, x, x_legacy), y)...; uncertain, warn_nn_train_bounds, fidelity)
                 y .*= err
             else
                 tglfmod2, tglfmod3 = _radial_blend_models(tglfmod, model_filename, variants)
                 nearedge_mask, edge_mask = _radial_blend_masks(x, k_rminloc, variants)
-                y2 = flux_array(tglfmod2, x; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
-                y3 = flux_array(tglfmod3, x; uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
+                y2 = flux_array(tglfmod2, _vexb_input(tglfmod2, x, x_legacy); uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
+                y3 = flux_array(tglfmod3, _vexb_input(tglfmod3, x, x_legacy); uncertain, warn_nn_train_bounds, fidelity=:TGLFNN)
 
                 gknn31 = loadmodelonce(model_filename * "_gknn31")
                 gknn37 = loadmodelonce(model_filename * "_gknn37")
-                err1 = flux_array(gknn31, vcat(x, y); uncertain, warn_nn_train_bounds, fidelity)
-                err2 = flux_array(gknn37, vcat(x, y2); uncertain, warn_nn_train_bounds, fidelity)
-                err3 = flux_array(gknn37, vcat(x, y3); uncertain, warn_nn_train_bounds, fidelity)
+                x31 = _vexb_input(gknn31, x, x_legacy)
+                x37 = _vexb_input(gknn37, x, x_legacy)
+                err1 = flux_array(gknn31, vcat(x31, y); uncertain, warn_nn_train_bounds, fidelity)
+                err2 = flux_array(gknn37, vcat(x37, y2); uncertain, warn_nn_train_bounds, fidelity)
+                err3 = flux_array(gknn37, vcat(x37, y3); uncertain, warn_nn_train_bounds, fidelity)
 
                 for i in axes(x, 2)
                     if nearedge_mask[i]
@@ -879,16 +944,16 @@ function run_tglfnn(data::Dict; model_filename::String, uncertain::Bool=false, w
             end
         elseif model_filename in ("sat3_em_d3d+mastu+nstx_azf-1", "sat3_em_d3d_azf-1_gkdb", "sat2_em_d3d+mastu+nstx_azf-1")
             gknn = loadmodelonce(model_filename * "_gknn31")
-            err = gknn(vcat(x, y)...; uncertain, warn_nn_train_bounds, fidelity)
+            err = gknn(vcat(_vexb_input(gknn, x, x_legacy), y)...; uncertain, warn_nn_train_bounds, fidelity)
             y .*= err
             if model_filename == "sat3_em_d3d_azf-1_gkdb"
                 gkdb = loadmodelonce(model_filename * "_gknn31_cgyro")
-                gkdb_err = gkdb(vcat(x, y)...; uncertain, warn_nn_train_bounds, fidelity)
+                gkdb_err = gkdb(vcat(_vexb_input(gkdb, x, x_legacy), y)...; uncertain, warn_nn_train_bounds, fidelity)
                 y .*= gkdb_err
             end
         elseif model_filename == "sat3_em_d3d+mastu_azf-1"
             gknn = loadmodelonce(model_filename * "_gknn36")
-            err = gknn(vcat(x, y)...; uncertain, warn_nn_train_bounds, fidelity)
+            err = gknn(vcat(_vexb_input(gknn, x, x_legacy), y)...; uncertain, warn_nn_train_bounds, fidelity)
             y .*= err
         end
     end
@@ -976,15 +1041,20 @@ function _session(onnx_path::String; intra_threads::Int=1, inter_threads::Int=1)
 end
 
 # Build X as [N, F] Float32 without intermediate allocations; supports InputTGLF{T}
-function _build_X(input_tglfs::AbstractVector{TJLF.InputTGLF{T}}, xnames::Vector{String}) where {T}
+function _build_X(input_tglfs::AbstractVector{TJLF.InputTGLF{T}}, xnames::Vector{String};
+                  vexb_convention::Symbol=:legacy) where {T}
     N = length(input_tglfs); F = length(xnames)
     X = Matrix{Float32}(undef, N, F)
+    flip = vexb_convention === :legacy
     @inbounds for i in 1:N
         t = input_tglfs[i]
         for j in 1:F
             name = xnames[j]
             key  = replace(name, "_log10" => "")
             v    = getfield(t, Symbol(key))
+            if flip && key == "VEXB_SHEAR"
+                v = v * vexb_sign(t)   # legacy VEXB_SHEAR = SIGN_BT * TGYRO VEXB_SHEAR (exact)
+            end
             X[i, j] = occursin("_log10", name) ? log10(Float32(v)) : Float32(v)
         end
     end
@@ -1012,7 +1082,11 @@ the BSON/Flux path of [`run_tglfnn`](@ref).
 built-in `models/` directory; `xnames`/`ynames` are the model's input/output
 feature names (a trailing `_log10` on an `xname` triggers a `log10` transform of
 that feature). `intra_threads`/`inter_threads` control the ONNXRuntime session
-thread pools (sessions are cached and reused).
+thread pools (sessions are cached and reused). `vexb_convention` (`:legacy` or `:tgyro`)
+is the sign convention of the model's `VEXB_SHEAR` training feature; it defaults to the
+table lookup on the ONNX file name (`_default_vexb_convention`) and, for `:legacy`, the
+`VEXB_SHEAR` feature is multiplied by `SIGN_BT` (from the `InputTGLF`, or a `"SIGN_BT"`
+entry of the `Dict` form when present).
 
 Three input forms are supported and dispatch to matching output shapes:
 - a single `InputTGLF` -> a `Vector` of the (reordered) output fluxes,
@@ -1023,10 +1097,11 @@ function run_tglfnn_onnx(input_tglfs::AbstractVector{TJLF.InputTGLF{T}},
                          onnx_path::String,
                          xnames::Vector{String},
                          ynames::Vector{String};
-                         intra_threads::Int=1, inter_threads::Int=1) where {T<:Real}
+                         intra_threads::Int=1, inter_threads::Int=1,
+                         vexb_convention::Symbol=_default_vexb_convention(_model_basename(onnx_path))) where {T<:Real}
 
     sess = _session(onnx_path; intra_threads=intra_threads, inter_threads=inter_threads)
-    X = _build_X(input_tglfs, xnames)                     # [N,F]
+    X = _build_X(input_tglfs, xnames; vexb_convention)    # [N,F]
     res = sess((; input = X))                             # NamedTuple or Dict
     Y  = _extract_Y(res, size(X,1), length(ynames))       # [N,M]
     cols = [1, 4, 2, 3]
@@ -1045,7 +1120,8 @@ function run_tglfnn_onnx(data::Dict,
                          onnx_path::String,
                          xnames::Vector{String},
                          ynames::Vector{String};
-                         intra_threads::Int=1, inter_threads::Int=1)::Dict
+                         intra_threads::Int=1, inter_threads::Int=1,
+                         vexb_convention::Symbol=_default_vexb_convention(_model_basename(onnx_path)))::Dict
 
     sess = _session(onnx_path; intra_threads=intra_threads, inter_threads=inter_threads)
 
@@ -1056,6 +1132,9 @@ function run_tglfnn_onnx(data::Dict,
     @inbounds for j in 1:F
         col = data[xclean[j]]
         @assert length(col) == N
+        if vexb_convention === :legacy && xclean[j] == "VEXB_SHEAR" && haskey(data, "SIGN_BT")
+            col = col .* Int.(round.(data["SIGN_BT"]))
+        end
         if occursin("_log10", xnames[j])
             for i in 1:N; X[i,j] = log10(Float32(col[i])); end
         else
@@ -1076,19 +1155,13 @@ function run_tglfnn_onnx(input_tglf::TJLF.InputTGLF{T},
                          onnx_path::String,
                          xnames::Vector{String},
                          ynames::Vector{String};
-                         intra_threads::Int=1, inter_threads::Int=1) where {T<:Real}
+                         intra_threads::Int=1, inter_threads::Int=1,
+                         vexb_convention::Symbol=_default_vexb_convention(_model_basename(onnx_path))) where {T<:Real}
 
     sess = _session(onnx_path; intra_threads=intra_threads, inter_threads=inter_threads)
 
     # X is 1×F
-    F = length(xnames)
-    X = Matrix{Float32}(undef, 1, F)
-    @inbounds for j in 1:F
-        name = xnames[j]
-        key  = replace(name, "_log10" => "")
-        v    = getfield(input_tglf, Symbol(key))
-        X[1,j] = occursin("_log10", name) ? log10(Float32(v)) : Float32(v)
-    end
+    X = _build_X([input_tglf], xnames; vexb_convention)
 
     res = sess((; input = X))
     Y   = _extract_Y(res, 1, length(ynames))              # [1,M]
