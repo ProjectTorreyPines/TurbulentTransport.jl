@@ -58,7 +58,8 @@ function _dict2modeid(dict::AbstractDict)
 end
 
 function _dict2modeid_ensemble(dict::Dict)
-    return ModeIDensemble([_dict2modeid(modict) for modict in values(dict)])
+    # sorted key order: deterministic member order across Julia versions (Dict iteration order changed in 1.13)
+    return ModeIDensemble([_dict2modeid(dict[k]) for k in sort!(collect(keys(dict)))])
 end
 
 """

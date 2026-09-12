@@ -210,7 +210,10 @@ function dict2mod(savedict::AbstractDict)
 end
 
 function dict2ens(dict::Dict)
-    return TGLFNNensemble([dict2mod(modict) for modict in values(dict)])
+    # Iterate in sorted key order so ensemble member order (and hence `models[1]`) is
+    # deterministic. Dict iteration order depends on the hash implementation and changed
+    # between Julia 1.12 and 1.13, which silently reordered members and broke regression pins.
+    return TGLFNNensemble([dict2mod(dict[k]) for k in sort!(collect(keys(dict)))])
 end
 
 function loadmodel(filename::AbstractString)
