@@ -124,12 +124,12 @@ end
 # Expected baseline values for regression testing
 # Captured from v1.0.14 to detect any numerical changes
 
-# flux_array expected outputs for sat0_em_d3d single model (first model in ensemble)
-const EXPECTED_FLUX_ARRAY_SINGLE = [0.021994637644215054, 0.14526707591951704, 0.4718316916684522, 0.4132556522695987]
+# flux_array expected outputs for sat0_em_d3d single model (first model in ensemble = lowest BSON key, sorted in dict2ens)
+const EXPECTED_FLUX_ARRAY_SINGLE = [0.020119015925778916, 0.23107953401865972, 0.7410156911426711, 0.6620782527214439]
 
 # GKNN correction model (sat3_em_d3d_azf-1_gknne24) expected outputs
 # These models have ynames of length 2, and fidelity=:GKNN outputs div(ynames, 2) = 1 value
-const EXPECTED_GKNN_MODEL_SINGLE = [0.93651175002966]
+const EXPECTED_GKNN_MODEL_SINGLE = [1.0372520644956456]
 const EXPECTED_GKNN_MODEL_ENSEMBLE = [0.9496942106346887]
 
 # flux_array expected outputs for sat3_em_d3d_azf-1 ensemble
