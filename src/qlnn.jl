@@ -129,6 +129,9 @@ struct QLNNbundle
     eigenvalue::AbstractQLNNmodel
     stability::Union{Nothing,AbstractQLNNmodel}
     momentum_sign::Float64
+    # sign convention of the VEXB_SHEAR training feature (:tgyro | :legacy), from the
+    # `vexb_convention` sidecar file; CGYRO-trained bundles (the default) are :tgyro
+    vexb_convention::Symbol
     dir::String
 end
 
@@ -256,7 +259,23 @@ function loadqlnnbundle(name::AbstractString)
     stab_path = joinpath(base, _QLNN_STABILITY_FILE)
     stability = isfile(stab_path) ? loadqlnnmodelonce(stab_path) : nothing
     momentum_sign = _qlnn_read_momentum_sign(base)
-    return QLNNbundle(energy, particle, momentum, eigval, stability, momentum_sign, base)
+    vexb_convention = _qlnn_read_vexb_convention(base)
+    return QLNNbundle(energy, particle, momentum, eigval, stability, momentum_sign, vexb_convention, base)
+end
+
+"""
+    _qlnn_read_vexb_convention(base) -> Symbol
+
+Read the `vexb_convention` sidecar file of a QLNN bundle directory (`tgyro` or
+`legacy`). Missing file -> `:tgyro`: QLNN bundles are trained on linear CGYRO
+databases whose inputs come from locpargen (TGYRO convention); TGLF-trained bundles
+(e.g. `QLNN_d3d_1`, ig2it inputs before runTGLFdb 894e2ed) ship a `legacy` sidecar.
+See `_default_vexb_convention`.
+"""
+function _qlnn_read_vexb_convention(base::AbstractString)
+    path = joinpath(base, "vexb_convention")
+    isfile(path) || return :tgyro
+    return _validate_vexb_convention(strip(read(path, String)), "QLNN bundle $path")
 end
 
 function _qlnn_read_momentum_sign(base::AbstractString)
@@ -880,7 +899,8 @@ end
 # views — no per-radial `Matrix{T}` allocation.
 function _qlnn_fill_xs!(xs::AbstractMatrix{T}, input_tjlf::TJLF.InputTJLF{T},
                         ky_spectrum::AbstractVector,
-                        xnames::Vector{String}) where {T<:Real}
+                        xnames::Vector{String};
+                        vexb_convention::Symbol=:tgyro) where {T<:Real}
     nky = size(xs, 2)
     @assert length(ky_spectrum) == nky "_qlnn_fill_xs!: nky mismatch (xs has $nky cols, ky_spectrum has $(length(ky_spectrum)))"
     @assert size(xs, 1) == length(xnames) "_qlnn_fill_xs!: nfeat mismatch (xs has $(size(xs,1)) rows, xnames has $(length(xnames)))"
@@ -896,6 +916,9 @@ function _qlnn_fill_xs!(xs::AbstractMatrix{T}, input_tjlf::TJLF.InputTJLF{T},
             error("QLNN input field `$name` is `missing` in InputTJLF — cannot build feature row.")
         end
         scalar = T(val)
+        if vexb_convention === :legacy && _qlnn_strip_log_suffix(name) == "VEXB_SHEAR"
+            scalar *= vexb_sign(input_tjlf)   # legacy VEXB_SHEAR = SIGN_BT * TGYRO VEXB_SHEAR
+        end
         for j in 1:nky
             xs[i, j] = scalar
         end
@@ -907,9 +930,9 @@ end
 # at eltype `T`. Used by tests / single-radial debugging; the hot path goes
 # through `_qlnn_fill_xs!` directly.
 function _qlnn_build_xs(input_tjlf::TJLF.InputTJLF{T}, ky_spectrum::AbstractVector,
-                       xnames::Vector{String}) where {T<:Real}
+                       xnames::Vector{String}; vexb_convention::Symbol=:tgyro) where {T<:Real}
     xs = Matrix{T}(undef, length(xnames), length(ky_spectrum))
-    return _qlnn_fill_xs!(xs, input_tjlf, ky_spectrum, xnames)
+    return _qlnn_fill_xs!(xs, input_tjlf, ky_spectrum, xnames; vexb_convention)
 end
 
 #= ============================================================ =#
@@ -1267,7 +1290,7 @@ function _run_qlnn_predict(input_tjlfs::Vector{TJLF.InputTJLF{T}}, bundle::QLNNb
         c0 = chunk_starts[r]
         nk = nky_r[r]
         @views _qlnn_fill_xs!(xs_all[:, c0:c0+nk-1], input_tjlfs[r],
-                              ky_spectrums[r], energy_xnames)
+                              ky_spectrums[r], energy_xnames; vexb_convention=bundle.vexb_convention)
     end
 
     # Eigenvalue head / stability classifier may use a different feature set than
@@ -1279,7 +1302,7 @@ function _run_qlnn_predict(input_tjlfs::Vector{TJLF.InputTJLF{T}}, bundle::QLNNb
             c0 = chunk_starts[r]
             nk = nky_r[r]
             @views _qlnn_fill_xs!(xs[:, c0:c0+nk-1], input_tjlfs[r],
-                                  ky_spectrums[r], xnames_vec)
+                                  ky_spectrums[r], xnames_vec; vexb_convention=bundle.vexb_convention)
         end
         xs
     end
@@ -1418,7 +1441,8 @@ function _qlnn_fill_xs_with_eig!(xs::AbstractMatrix{T}, input_tjlf::TJLF.InputTJ
                                  ky_spectrum::AbstractVector,
                                  xnames::Vector{String},
                                  gamma_ky::AbstractVector,
-                                 omega_ky::AbstractVector) where {T<:Real}
+                                 omega_ky::AbstractVector;
+                                 vexb_convention::Symbol=:tgyro) where {T<:Real}
     nky = size(xs, 2)
     @assert length(ky_spectrum) == nky "_qlnn_fill_xs_with_eig!: nky mismatch (xs $nky cols, ky $(length(ky_spectrum)))"
     @assert length(gamma_ky)    == nky "_qlnn_fill_xs_with_eig!: gamma_ky length mismatch"
@@ -1443,6 +1467,9 @@ function _qlnn_fill_xs_with_eig!(xs::AbstractMatrix{T}, input_tjlf::TJLF.InputTJ
                 error("QLNN width input field `$name` is `missing` in InputTJLF.")
             end
             scalar = T(val)
+            if vexb_convention === :legacy && _qlnn_strip_log_suffix(name) == "VEXB_SHEAR"
+                scalar *= vexb_sign(input_tjlf)
+            end
             for j in 1:nky
                 xs[i, j] = scalar
             end
@@ -1535,6 +1562,7 @@ function qlnn_fluctuation_spectra(input_tjlfs::Vector{TJLF.InputTJLF{T}};
                                   use_width_nn::Bool = true) where {T<:Real}
     bundle = loadqlnnbundleonce(String(bundle_name))
     width_model = nothing
+    width_vexb_convention = bundle.vexb_convention
     if use_width_nn
         # Try bundle dir first, then `width_bundle_name` if specified.
         for dir in (bundle.dir,
@@ -1544,6 +1572,7 @@ function qlnn_fluctuation_spectra(input_tjlfs::Vector{TJLF.InputTJLF{T}};
             if isfile(width_path)
                 try
                     width_model = loadqlnnmodelonce(width_path)
+                    width_vexb_convention = _qlnn_read_vexb_convention(dir)
                     break
                 catch err
                     @warn "qlnn_fluctuation_spectra: failed to load width regressor; falling back to constant WIDTH" path=width_path err=err
@@ -1561,6 +1590,7 @@ function qlnn_fluctuation_spectra(input_tjlfs::Vector{TJLF.InputTJLF{T}};
     end
     return qlnn_fluctuation_spectra(input_tjlfs, bundle;
                                     width_model=width_model,
+                                    width_vexb_convention=width_vexb_convention,
                                     warn_nn_train_bounds=warn_nn_train_bounds,
                                     stability_threshold=stability_threshold,
                                     kx=kx, n_kx=n_kx, kx_max_sigma=kx_max_sigma)
@@ -1569,6 +1599,7 @@ end
 function qlnn_fluctuation_spectra(input_tjlfs::Vector{TJLF.InputTJLF{T}},
                                   bundle::QLNNbundle;
                                   width_model::Union{Nothing,AbstractQLNNmodel} = nothing,
+                                  width_vexb_convention::Symbol = bundle.vexb_convention,
                                   warn_nn_train_bounds::Bool = false,
                                   stability_threshold::Real = 0.5,
                                   kx::Union{Nothing,AbstractVector} = nothing,
@@ -1611,7 +1642,7 @@ function qlnn_fluctuation_spectra(input_tjlfs::Vector{TJLF.InputTJLF{T}},
                                                ks, pred.eig_norm_by_ky)
             xs_w = Matrix{T}(undef, length(width_model.xnames), nk)
             _qlnn_fill_xs_with_eig!(xs_w, input_tjlfs[r], ks,
-                                    width_model.xnames, γ_phys, ω_phys)
+                                    width_model.xnames, γ_phys, ω_phys; vexb_convention=width_vexb_convention)
             y_w = predict(width_model, xs_w)  # (1, nk) for the width head
             # Width is positive; clamp tiny negative drift from NN extrapolation.
             width_predictions[r] = T[max(T(y_w[1, j]), T(1e-3)) for j in 1:nk]

@@ -172,7 +172,8 @@ function InputTGLF_EP(
     mach = Rmaj[gridpoint_cp] .* w0[gridpoint_cp] ./ c_s
     input_tglf.VPAR_1 = -input_tglf.SIGN_IT .* mach
     input_tglf.VPAR_SHEAR_1 = -input_tglf.SIGN_IT .* (a ./ c_s) .* gamma_p
-    input_tglf.VEXB_SHEAR = -gamma_e .* (a ./ c_s)
+    # TGYRO sign convention (same as tglf.jl): -SIGN_BT*gamma_e*a/c_s
+    input_tglf.VEXB_SHEAR = -input_tglf.SIGN_BT .* gamma_e .* (a ./ c_s)
 
     # ===== EP Data: Calculate for ALL radii (TJLFEP needs full profiles) =====
     # Get FULL radial grid (not just selected points)

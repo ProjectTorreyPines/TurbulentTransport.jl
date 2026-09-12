@@ -329,3 +329,74 @@ function available_qlnn_bundles()
     end
     unique!(bundles)
 end
+
+#= ================================ =#
+#  VEXB_SHEAR sign convention per model
+#= ================================ =#
+
+"""
+Models whose training corpus carried `VEXB_SHEAR` in the TGYRO/locpargen convention
+(`VEXB_SHEAR = -SIGN_BT*gamma_e*a/c_s`, same sign as `VPAR_SHEAR_1`). Every other
+model without an explicit `vexb_convention` key in its BSON is taken to be `:legacy`
+(`VEXB_SHEAR = -gamma_e*a/c_s` with signed q, i.e. `SIGN_BT` times the TGYRO value),
+which is what `InputTGLF(dd, ...)` produced before TurbulentTransport 1.4 and what
+atom-omfit `ig2it` produced before runTGLFdb 894e2ed. The two differ only on devices
+with `SIGN_BT = -1` (ITER in FUSE, DIII-D, MAST-U, NSTX).
+
+The list was derived from the sign of the stored input mean `xm[VEXB_SHEAR]` relative
+to `xm[VPAR_SHEAR_1]` of every shipped model (audit 2026-09-10): CGYRO/locpargen-derived
+nets (`*_gknn*`, `*_qlnn`, `modeid_qlgyro_*`) and the ST edge/near-edge nets trained on
+ig2it-corrected corpora are `:tgyro`.
+"""
+const _VEXB_TGYRO_MODELS = Set{String}([
+    # GKNN correction nets (CGYRO/QLGYRO targets, locpargen inputs)
+    "sat3_em_d3d_azf-1_gknne23", "sat3_em_d3d_azf-1_gknne24",
+    "sat3_em_d3d_azf-1_gknng23", "sat3_em_d3d_azf-1_gknng24",
+    "sat3_em_d3d_azf-1_gknni23", "sat3_em_d3d_azf-1_gknni24",
+    "sat3_em_d3d_azf-1_gknnp23", "sat3_em_d3d_azf-1_gknnp24",
+    "sat2_em_d3d+mastu+nstx_azf-1_gknn25", "sat2_em_d3d+mastu+nstx_azf-1_gknn31",
+    "sat3_em_d3d+mastu+nstx_azf-1_gknn25", "sat3_em_d3d+mastu+nstx_azf-1_gknn31",
+    "sat3_em_d3d+mastu_azf-1_gknn36",
+    "sat3_em_d3d_azf-1_withnegD_gknn31", "sat3_em_d3d_azf-1_withnegD_gknn37",
+    "sat3_em_d3d_azf-1_gkdb_gknn31", "sat3_em_d3d_azf-1_gkdb_gknn31_cgyro",
+    # QLGYRO-trained flux nets
+    "sat2_em_d3d_azf+1_qlnn", "sat2_em_d3d_azf-1_qlnn",
+    "sat3_em_d3d_azf+1_qlnn", "sat3_em_d3d_azf-1_qlnn",
+    # ModeID trained on QLGYRO labels
+    "modeid_qlgyro_sat3_azf-1",
+    # ST edge / near-edge nets (ig2it-corrected corpora, runTGLFdb >= 894e2ed)
+    "sat3_em_mastuedge+nstxedge_azf-1_withnegD",
+    "sat3_em_mastunearedge+nstxnearedge_azf-1_withnegD",
+])
+
+const _VEXB_CONVENTIONS = (:tgyro, :legacy)
+
+"""
+    _default_vexb_convention(model_basename) -> Symbol
+
+`:tgyro` if `model_basename` (file name without directory and extension) is listed in
+`_VEXB_TGYRO_MODELS`, otherwise `:legacy`. Used when a model file carries no
+`vexb_convention` key.
+"""
+_default_vexb_convention(model_basename::AbstractString) = String(model_basename) in _VEXB_TGYRO_MODELS ? :tgyro : :legacy
+
+_model_basename(fullpath::AbstractString) = first(splitext(basename(String(fullpath))))
+
+function _validate_vexb_convention(c, where::AbstractString)
+    s = Symbol(c)
+    s in _VEXB_CONVENTIONS || error("$where: vexb_convention must be one of $(_VEXB_CONVENTIONS), got $(repr(c))")
+    return s
+end
+
+"""
+    vexb_sign(input) -> Int
+
+`SIGN_BT` of an `InputTGLF`/`InputTJLF` as an `Int` (unset -> +1, the TGLF default).
+For a model with `vexb_convention == :legacy` the `VEXB_SHEAR` feature is multiplied by
+this before inference, since legacy VEXB_SHEAR = SIGN_BT * TGYRO VEXB_SHEAR.
+"""
+function vexb_sign(input)
+    s = input.SIGN_BT
+    TJLF.is_unset(s) && return 1
+    return Int(round(s))
+end

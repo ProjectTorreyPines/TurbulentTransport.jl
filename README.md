@@ -116,6 +116,27 @@ The first-principles drivers `run_tglf` (Fortran TGLF), `run_tjlf` (Julia TJLF),
 `run_qlgyro` (QLGYRO) share the same input types and `FluxSolution` outputs, which makes
 them convenient ground truth for the surrogates.
 
+### VEXB_SHEAR sign conventions
+
+Two conventions for the sign of `VEXB_SHEAR` exist in the training corpora. TurbulentTransport
+works internally in the **TGYRO / locpargen** convention, `VEXB_SHEAR = -SIGN_BT * gamma_e * a/c_s`
+(equivalently `VPAR_SHEAR_1 * r/(|q| R)`, i.e. the same sign as `VPAR_SHEAR_1`): this is what
+`InputTGLF(dd, ...)` writes since v1.4 and what `input.tglf` files written by `profiles_gen`/`ig2it`
+(runTGLFdb >= 894e2ed) contain. Older corpora — FUSE-generated inputs before v1.4 and atom-omfit
+`ig2it` outputs — carry the **legacy** sign `-gamma_e * a/c_s` with signed `q`, which equals
+`SIGN_BT` times the TGYRO value and therefore differs only on devices with `SIGN_BT = -1`
+(ITER in FUSE, DIII-D, MAST-U, NSTX).
+
+Every model carries a `vexb_convention` tag (`:tgyro` or `:legacy`). It is read from the model
+file when present (trainers write it) and otherwise looked up by file name in
+`_VEXB_TGYRO_MODELS` (`src/models.jl`), defaulting to `:legacy`; QLNN bundles use a
+`vexb_convention` sidecar file (default `:tgyro`, CGYRO-trained). At inference `run_tglfnn`,
+`run_tglfnn_onnx`, `run_qlnn` and `run_modeid_nn` multiply the `VEXB_SHEAR` feature of `:legacy`
+models by the sample's `SIGN_BT`, so each net is evaluated exactly on the sign it was trained on,
+even when a GKNN correction or a radial-blend variant of the other convention shares the call.
+The low-level `flux_array` takes its input matrix as already being in the model's convention.
+Dictionary inputs are flipped only when a `"SIGN_BT"` entry is supplied.
+
 ### Model naming and discovery
 
 Trained TGLF-NN / GKNN models follow the convention

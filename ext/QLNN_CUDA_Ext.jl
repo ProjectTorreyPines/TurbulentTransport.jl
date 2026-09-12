@@ -79,6 +79,7 @@ struct QLNNbundleGPU
     stability::Union{Nothing,QLNNmodelGPU,QLNNensembleGPU}
     width::Union{Nothing,QLNNmodelGPU,QLNNensembleGPU}
     momentum_sign::Float64
+    vexb_convention::Symbol
     dir::String
 end
 
@@ -159,7 +160,7 @@ function TurbulentTransport.qlnn_to_gpu(bundle::TurbulentTransport.QLNNbundle;
                    TurbulentTransport.qlnn_to_gpu(bundle.stability)
     width_g      = width === nothing ? nothing : TurbulentTransport.qlnn_to_gpu(width)
     return QLNNbundleGPU(energy_g, particle_g, momentum_g, eigenvalue_g, stability_g, width_g,
-                         bundle.momentum_sign, bundle.dir)
+                         bundle.momentum_sign, bundle.vexb_convention, bundle.dir)
 end
 
 # ==========================================================================
@@ -368,7 +369,7 @@ function TurbulentTransport.qlnn_fluctuation_spectra_gpu(
         nk = nky_r[r]
         view_block = view(xs_all, :, c0:c0+nk-1)
         _qlnn_fill_xs!(view_block, input_tjlfs[r],
-                       ky_spectrums[r], energy_xnames)
+                       ky_spectrums[r], energy_xnames; vexb_convention=bundle_gpu.vexb_convention)
     end
     xs_d = CuArray(Float32.(xs_all))
 
@@ -410,7 +411,7 @@ function TurbulentTransport.qlnn_fluctuation_spectra_gpu(
                                                bundle_gpu.eigenvalue.normalize_by_ky)
             xs_w = Matrix{T}(undef, length(width_xnames), nk)
             _qlnn_fill_xs_with_eig!(xs_w, input_tjlfs[r], ks,
-                                    width_xnames, γ_phys, ω_phys)
+                                    width_xnames, γ_phys, ω_phys; vexb_convention=bundle_gpu.vexb_convention)
             xs_w_d = CuArray(Float32.(xs_w))
             y_w_d  = predict_gpu(bundle_gpu.width, xs_w_d)
             y_w    = Float64.(Array(y_w_d))
