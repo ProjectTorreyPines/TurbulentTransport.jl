@@ -307,6 +307,10 @@ Returns a `FluxSolution` structure
 function run_tglf(input_tglf::InputTGLF)
     folder = mktempdir()
 
+    if !input_tglf.USE_PRESETS
+        @warn "USE_PRESETS=false is a TJLF-only switch: Fortran TGLF hard-codes presets ON (tglf_startup.f90) and input.tglf has no such key; running with presets applied" maxlog = 1
+    end
+
     save(input_tglf, joinpath(folder, "input.tglf"))
 
     preamble = gacode_preamble()

@@ -48,6 +48,55 @@ using GACODE
         end
     end
 
+    @testset "save writes only Fortran-accepted keys" begin
+        # Regression: TJLF 2.0.1 added the Julia-only USE_PRESETS field to InputTGLF and
+        # `save` wrote it into input.tglf; GACODE's tglf_parse.py rejects unknown keys
+        # ("Bogus parameter USE_PRESETS") so Fortran TGLF never ran.
+        input_tglf = load_sample_input()
+        tmpdir = mktempdir()
+        try
+            save_path = joinpath(tmpdir, "input.tglf")
+            TurbulentTransport.save(input_tglf, save_path)
+            keys_written = Symbol[Symbol(strip(first(split(line, "=")))) for line in eachline(save_path) if occursin("=", line)]
+
+            @test :USE_PRESETS in TurbulentTransport.FORTRAN_TGLF_JULIA_ONLY_FIELDS
+            for key in TurbulentTransport.FORTRAN_TGLF_JULIA_ONLY_FIELDS
+                @test key ∉ keys_written
+            end
+            @test all(k -> !startswith(String(k), "_"), keys_written)
+            @test !isempty(keys_written)
+
+            # Julia-side semantics unchanged: USE_PRESETS is not in the file, so it keeps its default
+            reloaded = TurbulentTransport.load(InputTGLF{Float64}(), save_path)
+            @test reloaded.USE_PRESETS == InputTGLF{Float64}().USE_PRESETS == true
+
+            # End-to-end against the real GACODE pre-parser when an installation is reachable
+            tglf_bin = nothing
+            for root in (get(ENV, "GACODE_ROOT", ""), get(ENV, "GACODE_ROOT_CPU", ""))
+                isempty(root) && continue
+                candidate = joinpath(root, "tglf", "bin")
+                isfile(joinpath(candidate, "tglf_parse.py")) && (tglf_bin = candidate; break)
+            end
+            if tglf_bin === nothing && Sys.which("tglf") !== nothing
+                candidate = dirname(realpath(Sys.which("tglf")))
+                isfile(joinpath(candidate, "tglf_parse.py")) && (tglf_bin = candidate)
+            end
+            python = something(Sys.which("python"), Sys.which("python3"), nothing)
+            if tglf_bin !== nothing && python !== nothing
+                cmd = addenv(Cmd(`$python $(joinpath(tglf_bin, "tglf_parse.py"))`; dir=tmpdir), "PYTHONPATH" => tglf_bin)
+                out = IOBuffer()
+                ok = success(pipeline(cmd; stdout=out, stderr=out))
+                @test ok
+                ok || @warn "tglf_parse.py rejected the saved input.tglf" String(take!(out))
+                @test isfile(joinpath(tmpdir, "input.tglf.gen"))
+            else
+                @info "GACODE tglf_parse.py not found; skipping Fortran pre-parser check"
+            end
+        finally
+            rm(tmpdir; force=true, recursive=true)
+        end
+    end
+
     @testset "load parse errors" begin
         mktempdir() do tmp
             # Unparseable integer field (NS is an Int field).
