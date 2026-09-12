@@ -64,7 +64,8 @@ function _dict2finn(dict::AbstractDict)
 end
 
 function _dict2finn_ensemble(dict::Dict)
-    return FINNensemble([_dict2finn(modict) for modict in values(dict)])
+    # sorted key order: deterministic member order across Julia versions (Dict iteration order changed in 1.13)
+    return FINNensemble([_dict2finn(dict[k]) for k in sort!(collect(keys(dict)))])
 end
 
 """

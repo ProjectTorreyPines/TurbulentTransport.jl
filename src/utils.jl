@@ -97,15 +97,27 @@ function load(input::Union{InputTGLF,InputCGYRO,InputQLGYRO}, filename::Abstract
     return input
 end
 
+# Fields of InputTGLF that exist only on the Julia side and are NOT accepted by the
+# GACODE input.tglf parser (tglf/bin/tglf_defaults.py). gacodeinput.py aborts with
+# "ERROR: (gacodeinput) Bogus parameter <KEY>" on any unknown key and never writes
+# input.tglf.gen, so the Fortran executable is never launched. These must never be
+# written. USE_PRESETS gates TJLF.apply_presets! and mirrors a hard-coded .TRUE.
+# local in Fortran tglf_startup.f90 that has no input-file plumbing.
+const FORTRAN_TGLF_JULIA_ONLY_FIELDS = (:USE_PRESETS,)
+
 """
-    save(input::Union{InputTGLF, InputCGYRO}, filename::AbstractString)
+    save(input::Union{InputTGLF, InputCGYRO, InputQLGYRO}, filename::AbstractString)
 
 Write input_tglf/input_cgyro to file in input.tglf/input.cgyro/input.qlgyro format to be read by TGLF/CGYRO
+
+Underscore-prefixed bookkeeping fields and the Julia-only fields listed in
+`FORTRAN_TGLF_JULIA_ONLY_FIELDS` (e.g. `USE_PRESETS`) are omitted, since the Fortran
+parsers reject unknown keys.
 """
 function save(input::Union{InputTGLF,InputCGYRO,InputQLGYRO}, filename::AbstractString)
     open(filename, "w") do io
         for key in fieldnames(typeof(input))
-            if startswith(String(key), "_")
+            if startswith(String(key), "_") || key in FORTRAN_TGLF_JULIA_ONLY_FIELDS
                 continue
             end
             try
