@@ -269,7 +269,8 @@ end
 Read the `vexb_convention` sidecar file of a QLNN bundle directory (`tgyro` or
 `legacy`). Missing file -> `:tgyro`: QLNN bundles are trained on linear CGYRO
 databases whose inputs come from locpargen (TGYRO convention); TGLF-trained bundles
-(e.g. `QLNN_d3d_1`, ig2it inputs before runTGLFdb 894e2ed) ship a `legacy` sidecar.
+(e.g. `QLNN_d3d_1`, `QLNN_ukstep26_2`; ig2it inputs before runTGLFdb 894e2ed) ship a
+`legacy` sidecar.
 See `_default_vexb_convention`.
 """
 function _qlnn_read_vexb_convention(base::AbstractString)
@@ -1210,6 +1211,17 @@ function _run_qlnn_predict(input_tjlfs::Vector{TJLF.InputTJLF{T}}, bundle::QLNNb
     end
     nf = max(info_e.nf, info_p.nf, info_m.nf)
     ns = info_e.ns
+    # A DT-lumped bundle (e, DT, imp) reads slot 2 as the hydrogenic bulk and slot 3
+    # as the impurity. Its xnames are plain `AS_2`, `MASS_3`, ... so an unlumped
+    # (e, D, T, imp, ...) input would silently feed T into the impurity slot.
+    if info_e.species_set == collect(_QLNN_SPECIES_DT)
+        for (r, it) in enumerate(input_tjlfs)
+            it.NS == 3 || error("QLNN bundle `$(basename(bundle.dir))` is DT-lumped (species " *
+                "$(info_e.species_set)) and needs NS=3 inputs (electrons, D+T bulk, one lumped " *
+                "impurity), but input $r has NS=$(it.NS). Lump the ions first " *
+                "(e.g. `IMAS.lump_ions_as_bulk_and_impurity` / act.ActorTGLF.lump_ions = true).")
+        end
+    end
     # The QL-weight trio (energy/particle/momentum) packs into one shared QL
     # tensor and therefore MUST agree on xnames — the batched feature matrix
     # below is built once from `bundle.energy.xnames` and reused for all three.

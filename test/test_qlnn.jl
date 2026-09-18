@@ -247,3 +247,33 @@ else
         end
     end
 end
+
+# DT-lumped bundle (ukstep26_2): sidecars + the NS=3 guard. Skipped when the bundle
+# directory is absent (e.g. a checkout without LFS content).
+const QLNN_DT_BUNDLE = "QLNN_ukstep26_2"
+if isdir(joinpath(dirname(@__DIR__), "models", QLNN_DT_BUNDLE))
+    @testset "DT-lumped QLNN bundle ($QLNN_DT_BUNDLE)" begin
+        bundle = TurbulentTransport.loadqlnnbundle(QLNN_DT_BUNDLE)
+        @test bundle.vexb_convention === :legacy
+        @test bundle.momentum_sign == 1.0
+        @test bundle.stability !== nothing
+        info = TurbulentTransport._qlnn_parse_qlweight_ynames(bundle.energy.ynames)
+        @test info.species_set == ["e", "DT", "imp"]
+        @test info.ns == 3
+        # NS=3 input (sample input is e, D, C): runs and gives finite fluxes
+        it3 = InputTJLF{Float64}(load_sample_input_cgyro())
+        @test it3.NS == 3
+        sol = TurbulentTransport.run_qlnn(it3; bundle_name=QLNN_DT_BUNDLE, warn_nn_train_bounds=false)
+        @test isfinite(sol.ENERGY_FLUX_e) && isfinite(sol.ENERGY_FLUX_i)
+        # Unlumped input (NS=4) must be refused instead of feeding T into the impurity slot
+        g = load_sample_input_cgyro()
+        g.NS = 4
+        for p in (:AS, :ZS, :MASS, :RLNS, :RLTS, :TAUS, :VPAR, :VPAR_SHEAR)
+            setproperty!(g, Symbol(p, "_4"), getproperty(g, Symbol(p, "_3")))
+        end
+        g.ZS_3 = 1.0; g.MASS_3 = 1.5; g.AS_3 = 0.3 * g.AS_2; g.AS_2 = 0.7 * g.AS_2
+        it4 = InputTJLF{Float64}(g)
+        @test it4.NS == 4
+        @test_throws ErrorException TurbulentTransport.run_qlnn(it4; bundle_name=QLNN_DT_BUNDLE, warn_nn_train_bounds=false)
+    end
+end
