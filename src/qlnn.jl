@@ -293,6 +293,105 @@ Memoize.@memoize function loadqlnnbundleonce(name::String)
 end
 
 #= ============================================================ =#
+#  D+T lumping for DT-lumped bundles (e, DT, imp)
+#= ============================================================ =#
+
+"Tritium mass in deuterium-mass units (same literal as `_apply_stfpp_transform!`)."
+const _QLNN_T_OVER_D_MASS = 1.49760170089
+
+"True when QL-weight heads with these ynames were trained on the (e, DT, imp) species set."
+_qlnn_is_dt_lumped(energy_ynames::Vector{String}) =
+    _qlnn_parse_qlweight_ynames(energy_ynames).species_set == collect(_QLNN_SPECIES_DT)
+_qlnn_is_dt_lumped(bundle::QLNNbundle) = _qlnn_is_dt_lumped(bundle.energy.ynames)
+
+"""
+    qlnn_lump_dt(input_tjlf::InputTJLF) -> InputTJLF
+
+Lump an unbundled `(e, D, T, imp[, He])` input (`NS` = 4 or 5) into the `(e, DT, imp)`
+layout (`NS` = 3) that DT-lumped QLNN bundles such as `QLNN_ukstep26_2` were trained on.
+Returns `input_tjlf` itself when `NS == 3` (already lumped); otherwise a **new** `InputTJLF`
+(the caller's struct is not modified, so TJLF width memory written by `run_qlnn` stays on
+the copy).
+
+This is the inverse of the training-corpus D-T split (`_apply_stfpp_transform!` here,
+`unbundle_dt` in runTGLFdb) and matches TrainQLweightNN's `_dt_bundled_input`, i.e. the
+IMAS `lump_ions_as_bulk_and_impurity` convention applied to the two hydrogenic species:
+
+    AS_2   = AS_2 + AS_3                      densities sum
+    X_2    = (AS_2·X_2 + AS_3·X_3)/(AS_2+AS_3) for X in TAUS, RLNS, RLTS, VPAR, VPAR_SHEAR
+    MASS_2 = (AS_2·MASS_2 + AS_3·MASS_3)/(AS_2+AS_3)   ≈ 1.00 (D only) … 1.25 (50/50 D-T)
+    ZS_2   = 1
+    slot 3 = old slot 4 (the lumped impurity)
+
+With `NS == 5` the fifth species (thermal He ash in the STEP corpus) is first folded into
+the impurity exactly as runTGLFdb's `lump_he_ukstep26!` did when the database was built:
+charge density and Zeff are conserved (`Z' = Σ n Z² / Σ n Z`, `n' = (Σ n Z)² / Σ n Z²`),
+mass, temperature and rotation are density-weighted, and the density gradient is
+charge-weighted.
+
+Species 2 and 3 must both be hydrogenic (`ZS == 1`); anything else is an error rather
+than a silent mis-assignment.
+"""
+function qlnn_lump_dt(it::TJLF.InputTJLF{T}) where {T<:Real}
+    ns = it.NS
+    ns == 3 && return it
+    4 <= ns <= 5 || error("qlnn_lump_dt: expected NS = 3 (already lumped), 4 (e, D, T, imp) " *
+                          "or 5 (e, D, T, imp, He), got NS=$ns.")
+    (it.ZS[2] == 1 && it.ZS[3] == 1) ||
+        error("qlnn_lump_dt: species 2 and 3 must both be hydrogenic (ZS = 1) to be lumped " *
+              "into D+T; got ZS_2=$(it.ZS[2]), ZS_3=$(it.ZS[3]). Pass an (e, DT, imp) input " *
+              "with NS=3 instead.")
+
+    # --- impurity: slot 4, with He ash (slot 5) folded in per lump_he_ukstep26! ---
+    as4, zs4, m4 = it.AS[4], it.ZS[4], it.MASS[4]
+    taus4, rlts4, rlns4 = it.TAUS[4], it.RLTS[4], it.RLNS[4]
+    vpar4, vps4 = it.VPAR[4], it.VPAR_SHEAR[4]
+    if ns == 5
+        as5, zs5 = it.AS[5], it.ZS[5]
+        q    = as4 * zs4 + as5 * zs5        # charge density  — conserved
+        z2   = as4 * zs4^2 + as5 * zs5^2    # Zeff contribution — conserved
+        ntot = as4 + as5
+        rlns4 = (as4 * zs4 * rlns4 + as5 * zs5 * it.RLNS[5]) / q
+        m4    = (as4 * m4 + as5 * it.MASS[5]) / ntot
+        taus4 = (as4 * taus4 + as5 * it.TAUS[5]) / ntot
+        rlts4 = (as4 * rlts4 + as5 * it.RLTS[5]) / ntot
+        vpar4 = (as4 * vpar4 + as5 * it.VPAR[5]) / ntot
+        vps4  = (as4 * vps4 + as5 * it.VPAR_SHEAR[5]) / ntot
+        zs4, as4 = z2 / q, q^2 / z2
+    end
+
+    # --- hydrogenic bulk: slots 2 + 3, density-weighted ---
+    as2, as3 = it.AS[2], it.AS[3]
+    n = as2 + as3
+    n > 0 || error("qlnn_lump_dt: AS_2 + AS_3 must be positive, got $(n).")
+    wd, wt = as2 / n, as3 / n
+    mix(a, b) = wd * a + wt * b
+
+    out = deepcopy(it)
+    out.NS = 3
+    out.ZS         = T[it.ZS[1],         one(T),                        zs4]
+    out.MASS       = T[it.MASS[1],       mix(it.MASS[2], it.MASS[3]),   m4]
+    out.AS         = T[it.AS[1],         n,                             as4]
+    out.TAUS       = T[it.TAUS[1],       mix(it.TAUS[2], it.TAUS[3]),   taus4]
+    out.RLNS       = T[it.RLNS[1],       mix(it.RLNS[2], it.RLNS[3]),   rlns4]
+    out.RLTS       = T[it.RLTS[1],       mix(it.RLTS[2], it.RLTS[3]),   rlts4]
+    out.VPAR       = T[it.VPAR[1],       mix(it.VPAR[2], it.VPAR[3]),   vpar4]
+    out.VPAR_SHEAR = T[it.VPAR_SHEAR[1], mix(it.VPAR_SHEAR[2], it.VPAR_SHEAR[3]), vps4]
+    return out
+end
+
+# Inputs as the bundle expects them: DT-lumped bundles get (e, DT, imp) copies of any
+# NS > 3 input (`qlnn_lump_dt`); everything else passes through untouched (same vector,
+# so in-place width memory keeps working for the common NS == 3 case).
+function _qlnn_prepare_inputs(input_tjlfs::Vector{TJLF.InputTJLF{T}}, energy_ynames::Vector{String}) where {T<:Real}
+    _qlnn_is_dt_lumped(energy_ynames) || return input_tjlfs
+    all(it -> it.NS == 3, input_tjlfs) && return input_tjlfs
+    return TJLF.InputTJLF{T}[qlnn_lump_dt(it) for it in input_tjlfs]
+end
+_qlnn_prepare_inputs(input_tjlfs::Vector{TJLF.InputTJLF{T}}, bundle::QLNNbundle) where {T<:Real} =
+    _qlnn_prepare_inputs(input_tjlfs, bundle.energy.ynames)
+
+#= ============================================================ =#
 #  Forward inference (predict + classifier helper)
 #= ============================================================ =#
 
@@ -1129,6 +1228,7 @@ function run_qlnn(input_tjlfs::Vector{TJLF.InputTJLF{T}}, bundle::QLNNbundle;
     if nr == 0
         return flux_solutions
     end
+    input_tjlfs = _qlnn_prepare_inputs(input_tjlfs, bundle)
 
     pred = _run_qlnn_predict(input_tjlfs, bundle; warn_nn_train_bounds=warn_nn_train_bounds)
     nf = pred.nf
@@ -1213,13 +1313,15 @@ function _run_qlnn_predict(input_tjlfs::Vector{TJLF.InputTJLF{T}}, bundle::QLNNb
     ns = info_e.ns
     # A DT-lumped bundle (e, DT, imp) reads slot 2 as the hydrogenic bulk and slot 3
     # as the impurity. Its xnames are plain `AS_2`, `MASS_3`, ... so an unlumped
-    # (e, D, T, imp, ...) input would silently feed T into the impurity slot.
+    # (e, D, T, imp, ...) input would silently feed T into the impurity slot. The public
+    # entry points lump automatically (`_qlnn_prepare_inputs` -> `qlnn_lump_dt`); this is
+    # the safety net for direct callers.
     if info_e.species_set == collect(_QLNN_SPECIES_DT)
         for (r, it) in enumerate(input_tjlfs)
             it.NS == 3 || error("QLNN bundle `$(basename(bundle.dir))` is DT-lumped (species " *
                 "$(info_e.species_set)) and needs NS=3 inputs (electrons, D+T bulk, one lumped " *
-                "impurity), but input $r has NS=$(it.NS). Lump the ions first " *
-                "(e.g. `IMAS.lump_ions_as_bulk_and_impurity` / act.ActorTGLF.lump_ions = true).")
+                "impurity), but input $r has NS=$(it.NS). Use `qlnn_lump_dt` " *
+                "(what `run_qlnn` does) or lump the ions upstream (act.ActorTGLF.lump_ions = true).")
         end
     end
     # The QL-weight trio (energy/particle/momentum) packs into one shared QL
@@ -1621,6 +1723,7 @@ function qlnn_fluctuation_spectra(input_tjlfs::Vector{TJLF.InputTJLF{T}},
     if nr == 0
         return NamedTuple[]
     end
+    input_tjlfs = _qlnn_prepare_inputs(input_tjlfs, bundle)   # DT-lumped bundles: (e, DT, imp)
 
     # Sanity: every InputTJLF must declare a SAT_RULE the kx-Lorentzian path
     # supports and ALPHA_QUENCH=0 (matching `fluctuation_spectra`).

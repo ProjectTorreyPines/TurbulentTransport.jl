@@ -37,7 +37,7 @@ include("tglf_ep.jl")
 
 export InputTGLF, InputTJLF, available_models, available_qlnn_bundles, model_selector
 export InputTGLFEP, run_tjlfep
-export run_qlnn, qlnn_fluctuation_spectra, loadqlnnbundle, loadqlnnmodel
+export run_qlnn, qlnn_fluctuation_spectra, loadqlnnbundle, loadqlnnmodel, qlnn_lump_dt
 export QLNNmodel, QLNNensemble, QLNNbundle
 export qlnn_to_gpu, qlnn_fluctuation_spectra_gpu
 

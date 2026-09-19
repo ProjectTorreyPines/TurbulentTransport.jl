@@ -310,6 +310,7 @@ function TurbulentTransport.qlnn_fluctuation_spectra_gpu(
         kx::Union{Nothing,AbstractVector} = nothing) where {T<:Real}
 
     nr = length(input_tjlfs)
+    input_tjlfs = TurbulentTransport._qlnn_prepare_inputs(input_tjlfs, bundle_gpu.energy.ynames)   # DT-lumped bundles: (e, DT, imp)
     if nr == 0
         return NamedTuple[]
     end

@@ -289,6 +289,7 @@ function run_modeid_qlnn(input_tjlfs::Vector{InputTJLF{T}};
     nr == 0 && return TJLFModeIdentification{T}[]
 
     bundle = loadqlnnbundleonce(String(bundle_name))
+    input_tjlfs = _qlnn_prepare_inputs(input_tjlfs, bundle)   # DT-lumped bundles: (e, DT, imp)
     pred = _run_qlnn_predict(input_tjlfs, bundle; warn_nn_train_bounds)
     nf = pred.info_e.nf
     ns = pred.info_e.ns

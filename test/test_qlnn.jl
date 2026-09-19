@@ -248,9 +248,32 @@ else
     end
 end
 
-# DT-lumped bundle (ukstep26_2): sidecars + the NS=3 guard. Skipped when the bundle
-# directory is absent (e.g. a checkout without LFS content).
+# DT-lumped bundle (ukstep26_2): sidecars, automatic D+T lumping, and the NS=3 guard.
+# Skipped when the bundle directory is absent (e.g. a checkout without LFS content).
 const QLNN_DT_BUNDLE = "QLNN_ukstep26_2"
+
+# (e, D, T, C) NS=4 variant of the sample input: split the D density 70/30 into D and T,
+# move C to slot 4. Mirrors the corpus D-T split (`_apply_stfpp_transform!`).
+function _sample_input_unbundled(; he_ash::Bool=false)
+    g = load_sample_input_cgyro()
+    for p in (:AS, :ZS, :MASS, :RLNS, :RLTS, :TAUS, :VPAR, :VPAR_SHEAR)
+        setproperty!(g, Symbol(p, "_4"), getproperty(g, Symbol(p, "_3")))
+    end
+    as2 = g.AS_2
+    g.AS_2 = 0.7 * as2; g.AS_3 = 0.3 * as2
+    g.ZS_3 = 1.0; g.MASS_3 = 1.49760170089
+    g.RLNS_3 = g.RLNS_2 + 0.2; g.RLTS_3 = g.RLTS_2 - 0.1; g.TAUS_3 = g.TAUS_2 * 1.1
+    g.NS = 4
+    if he_ash
+        for p in (:AS, :ZS, :MASS, :RLNS, :RLTS, :TAUS, :VPAR, :VPAR_SHEAR)
+            setproperty!(g, Symbol(p, "_5"), getproperty(g, Symbol(p, "_4")))
+        end
+        g.ZS_5 = 2.0; g.MASS_5 = 2.0; g.AS_5 = 0.02; g.RLNS_5 = 0.1
+        g.NS = 5
+    end
+    return g
+end
+
 if isdir(joinpath(dirname(@__DIR__), "models", QLNN_DT_BUNDLE))
     @testset "DT-lumped QLNN bundle ($QLNN_DT_BUNDLE)" begin
         bundle = TurbulentTransport.loadqlnnbundle(QLNN_DT_BUNDLE)
@@ -260,20 +283,77 @@ if isdir(joinpath(dirname(@__DIR__), "models", QLNN_DT_BUNDLE))
         info = TurbulentTransport._qlnn_parse_qlweight_ynames(bundle.energy.ynames)
         @test info.species_set == ["e", "DT", "imp"]
         @test info.ns == 3
-        # NS=3 input (sample input is e, D, C): runs and gives finite fluxes
+        @test TurbulentTransport._qlnn_is_dt_lumped(bundle)
+        @test !TurbulentTransport._qlnn_is_dt_lumped(TurbulentTransport.loadqlnnbundle(QLNN_BUNDLE_NAME))
+        @test isfile(joinpath(bundle.dir, "input.tglf.template"))
+
+        # NS=3 input (sample input is e, D, C): used as is, finite fluxes
         it3 = InputTJLF{Float64}(load_sample_input_cgyro())
         @test it3.NS == 3
-        sol = TurbulentTransport.run_qlnn(it3; bundle_name=QLNN_DT_BUNDLE, warn_nn_train_bounds=false)
-        @test isfinite(sol.ENERGY_FLUX_e) && isfinite(sol.ENERGY_FLUX_i)
-        # Unlumped input (NS=4) must be refused instead of feeding T into the impurity slot
-        g = load_sample_input_cgyro()
-        g.NS = 4
-        for p in (:AS, :ZS, :MASS, :RLNS, :RLTS, :TAUS, :VPAR, :VPAR_SHEAR)
-            setproperty!(g, Symbol(p, "_4"), getproperty(g, Symbol(p, "_3")))
+        @test TurbulentTransport.qlnn_lump_dt(it3) === it3
+        sol3 = TurbulentTransport.run_qlnn(it3; bundle_name=QLNN_DT_BUNDLE, warn_nn_train_bounds=false)
+        @test isfinite(sol3.ENERGY_FLUX_e) && isfinite(sol3.ENERGY_FLUX_i)
+
+        @testset "qlnn_lump_dt NS=4" begin
+            g = _sample_input_unbundled()
+            it4 = InputTJLF{Float64}(g)
+            @test it4.NS == 4
+            l = TurbulentTransport.qlnn_lump_dt(it4)
+            @test l !== it4 && it4.NS == 4          # copy; caller untouched
+            @test l.NS == 3
+            @test length(l.AS) == 3 && length(l.MASS) == 3
+            n = g.AS_2 + g.AS_3; wd = g.AS_2 / n; wt = g.AS_3 / n
+            @test l.AS[2] ≈ n
+            @test l.ZS[2] == 1
+            @test l.MASS[2] ≈ wd * 1.0 + wt * 1.49760170089
+            @test l.TAUS[2] ≈ wd * g.TAUS_2 + wt * g.TAUS_3
+            @test l.RLNS[2] ≈ wd * g.RLNS_2 + wt * g.RLNS_3
+            @test l.RLTS[2] ≈ wd * g.RLTS_2 + wt * g.RLTS_3
+            # impurity: old slot 4 (= the sample's C) moves to slot 3
+            @test l.ZS[3] == g.ZS_4 && l.MASS[3] == g.MASS_4 && l.AS[3] == g.AS_4
+            @test l.RLNS[3] == g.RLNS_4 && l.TAUS[3] == g.TAUS_4
+            # electrons and scalars untouched
+            @test l.AS[1] == it4.AS[1] && l.RLTS[1] == it4.RLTS[1]
+            @test l.BETAE == it4.BETAE && l.Q_LOC == it4.Q_LOC && isequal(l.KY_SPECTRUM, it4.KY_SPECTRUM)
         end
-        g.ZS_3 = 1.0; g.MASS_3 = 1.5; g.AS_3 = 0.3 * g.AS_2; g.AS_2 = 0.7 * g.AS_2
-        it4 = InputTJLF{Float64}(g)
-        @test it4.NS == 4
-        @test_throws ErrorException TurbulentTransport.run_qlnn(it4; bundle_name=QLNN_DT_BUNDLE, warn_nn_train_bounds=false)
+
+        @testset "qlnn_lump_dt NS=5 (He ash into the impurity)" begin
+            g = _sample_input_unbundled(he_ash=true)
+            it5 = InputTJLF{Float64}(g)
+            l = TurbulentTransport.qlnn_lump_dt(it5)
+            @test l.NS == 3
+            q  = g.AS_4 * g.ZS_4 + g.AS_5 * g.ZS_5
+            z2 = g.AS_4 * g.ZS_4^2 + g.AS_5 * g.ZS_5^2
+            @test l.AS[3] * l.ZS[3] ≈ q            # charge density conserved
+            @test l.AS[3] * l.ZS[3]^2 ≈ z2         # Zeff contribution conserved
+            @test l.MASS[3] ≈ (g.AS_4 * g.MASS_4 + g.AS_5 * g.MASS_5) / (g.AS_4 + g.AS_5)
+            @test l.RLNS[3] ≈ (g.AS_4 * g.ZS_4 * g.RLNS_4 + g.AS_5 * g.ZS_5 * g.RLNS_5) / q
+        end
+
+        @testset "run_qlnn lumps automatically" begin
+            it4 = InputTJLF{Float64}(_sample_input_unbundled())
+            sol4 = TurbulentTransport.run_qlnn(it4; bundle_name=QLNN_DT_BUNDLE, warn_nn_train_bounds=false)
+            @test it4.NS == 4                        # caller's input not modified
+            itl = TurbulentTransport.qlnn_lump_dt(InputTJLF{Float64}(_sample_input_unbundled()))
+            soll = TurbulentTransport.run_qlnn(itl; bundle_name=QLNN_DT_BUNDLE, warn_nn_train_bounds=false)
+            @test sol4.ENERGY_FLUX_e == soll.ENERGY_FLUX_e
+            @test sol4.ENERGY_FLUX_i == soll.ENERGY_FLUX_i
+            @test sol4.PARTICLE_FLUX_e == soll.PARTICLE_FLUX_e
+            @test sol4.STRESS_TOR_i == soll.STRESS_TOR_i
+            # spectra path takes the same route
+            sp = TurbulentTransport.qlnn_fluctuation_spectra(InputTJLF{Float64}(_sample_input_unbundled());
+                                                             bundle_name=QLNN_DT_BUNDLE)
+            @test sp !== nothing
+        end
+
+        @testset "non-hydrogenic slot 3 is refused" begin
+            g = _sample_input_unbundled()
+            g.ZS_3 = 6.0; g.MASS_3 = 6.0             # (e, D, C, C): not a D-T pair
+            it = InputTJLF{Float64}(g)
+            @test_throws ErrorException TurbulentTransport.qlnn_lump_dt(it)
+            @test_throws ErrorException TurbulentTransport.run_qlnn(it; bundle_name=QLNN_DT_BUNDLE, warn_nn_train_bounds=false)
+            # direct predictor call with NS=4 hits the safety net
+            @test_throws ErrorException TurbulentTransport._run_qlnn_predict([InputTJLF{Float64}(_sample_input_unbundled())], bundle)
+        end
     end
 end

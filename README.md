@@ -101,7 +101,10 @@ can swap between them without rebuilding your problem.
   `ALPHA_ZF`, and `UNITS` from the input still apply. This is more physics-faithful than
   flux-level TGLF-NN and can additionally reconstruct 2D fluctuation spectra
   (`qlnn_fluctuation_spectra`, with a GPU path via the `CUDA` extension). QLNN bundles
-  live in `models/QLNN*` directories.
+  live in `models/QLNN*` directories. Bundles trained on a D+T-lumped species set
+  (`QLNN_ukstep26_2`: e, DT, imp) lump an unbundled NS=4/5 input automatically
+  (`qlnn_lump_dt`, the inverse of the corpus D-T split); each such bundle ships an
+  `input.tglf.template` with the TGLF switches its database ran with.
 
 - **FINN** (`run_finn`) — a flux-matcher *inversion* network. Instead of iterating a
   transport solve, it predicts the converged flux-matched gradients (a/L_Te, a/L_Ti,
