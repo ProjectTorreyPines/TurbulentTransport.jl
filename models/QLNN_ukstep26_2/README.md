@@ -48,5 +48,10 @@ FUSE, `act.ActorTGLF.lump_ions = true` already yields the NS=3 layout.
 Spearman 0.74-0.86 on every apar/bpar channel, medAE/MAD < 1 on every channel, R² after a
 -5 % |y| trim positive almost everywhere (v1 of this bundle fit only the tail envelope).
 Eigenvalue gamma R² 0.945, width 0.981, stability accuracy 0.968 / F1 0.982. Momentum is
-the weakest head (loss-space R² 0.41-0.63). Not yet validated end-to-end against TGLF fluxes
-on database inputs.
+the weakest head (loss-space R² 0.41-0.63).
+
+End-to-end (TrainQLweightNN `scripts/validate_qlnn_ukstep26_tjlf.jl`, 1500 database test shots,
+`run_qlnn` vs `run_tjlf` on the NS=4 database layout with the settings above): Qe/Qi/Ge within a
+factor 2 of TJLF for 69/62/58 % of shots (75/82/72 % of the shots with TJLF flux > 1), within 3x
+for 80/75/74 %, Spearman 0.93/0.93/0.91, median bias -20 %; momentum within 2x for 33 %. The
+largest fluxes are underpredicted (summed Qe ratio 0.53), consistent with the training tail cut.
