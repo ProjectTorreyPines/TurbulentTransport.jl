@@ -55,3 +55,7 @@ End-to-end (TrainQLweightNN `scripts/validate_qlnn_ukstep26_tjlf.jl`, 1500 datab
 factor 2 of TJLF for 69/62/58 % of shots (75/82/72 % of the shots with TJLF flux > 1), within 3x
 for 80/75/74 %, Spearman 0.93/0.93/0.91, median bias -20 %; momentum within 2x for 33 %. The
 largest fluxes are underpredicted (summed Qe ratio 0.53), consistent with the training tail cut.
+Parity figure: `validation_vs_tjlf_1500.png` in this folder (QLNN vs TJLF per channel, 2D log-log
+histograms; the top-left box carries the log-space statistics, the raw-y R² in the bottom-right box is
+outlier-dominated on these heavy tails). Regenerate with TrainQLweightNN
+`scripts/plot_qlnn_vs_tjlf.py --csv models/robust_eval/qlnn_ukstep26_2_vs_tjlf_1500.csv`.
