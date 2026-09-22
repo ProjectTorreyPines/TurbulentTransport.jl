@@ -314,7 +314,7 @@ Returns `input_tjlf` itself when `NS == 3` (already lumped); otherwise a **new**
 the copy).
 
 This is the inverse of the training-corpus D-T split (`_apply_stfpp_transform!` here,
-`unbundle_dt` in runTGLFdb) and matches TrainQLweightNN's `_dt_bundled_input`, i.e. the
+`unbundle_dt` in runTGLFdb) and matches the DT bundling used at training time, i.e. the
 IMAS `lump_ions_as_bulk_and_impurity` convention applied to the two hydrogenic species:
 
     AS_2   = AS_2 + AS_3                      densities sum
@@ -1550,7 +1550,7 @@ end
 #
 # `gamma_ky` and `omega_ky` are length-`nky` vectors (per-ky values) — already
 # multiplied by ky when `eig_norm_by_ky=true`, matching the `predict_gamma_omega`
-# convention from TrainQLweightNN.
+# convention of the training pipeline.
 function _qlnn_fill_xs_with_eig!(xs::AbstractMatrix{T}, input_tjlf::TJLF.InputTJLF{T},
                                  ky_spectrum::AbstractVector,
                                  xnames::Vector{String},
@@ -1628,7 +1628,7 @@ end
 end
 
 # Validate that a width regressor matches the chained-EV input contract
-# documented at TrainQLweightNN/src/TrainQLweightNN.jl:333. Returns true if
+# of the training pipeline (gamma/omega chained into the width inputs). Returns true if
 # it does, false otherwise (so callers can fall back to the constant `WIDTH`).
 function _qlnn_width_uses_chained_eig(width_model::AbstractQLNNmodel)
     width_xnames = width_model.xnames

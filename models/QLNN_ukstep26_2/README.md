@@ -3,9 +3,8 @@
 TGLF-trained QL-weight heads for the UKAEA STEP design point, from the runTGLFdb
 `ukstep26` corpus (production_run_2, `sat1_em_azf-1`: 69,273 input.gacode slices x 9 radii
 0.1..0.9, ±1 major scans of RLTS_1 / RLTS_23 / RLNS_12, 11-run minor stencil incl. VEXB_SHEAR
-and BETAE, ~5.3 M TGLF runs on OLCF Defiant, Aug 2026). Trained with TrainQLweightNN
-`VERSION=ukstep26tglf_v2` (20-member ensembles, 500 epochs, residual MLP 4x64); see
-`TrainQLweightNN/docs/QLNN_ukstep26_2_runbook.md` for the full provenance and scoring.
+and BETAE, ~5.3 M TGLF runs, Aug 2026). Training tag `ukstep26tglf_v2` (20-member
+ensembles, 500 epochs, residual MLP 4x64).
 
 | file | head | outputs |
 |---|---|---|
@@ -43,19 +42,18 @@ bulk/impurity convention). 35 inputs incl. `MASS_2` (density-weighted D/T mass, 
 caller's struct is untouched), an NS=3 input is used as is, and anything else errors. With
 FUSE, `act.ActorTGLF.lump_ions = true` already yields the NS=3 layout.
 
-## Scores (test split, robust metrics; TrainQLweightNN `scripts/eval_robust_metrics.sh`)
+## Scores (test split, robust metrics)
 
 Spearman 0.74-0.86 on every apar/bpar channel, medAE/MAD < 1 on every channel, R² after a
 -5 % |y| trim positive almost everywhere (v1 of this bundle fit only the tail envelope).
 Eigenvalue gamma R² 0.945, width 0.981, stability accuracy 0.968 / F1 0.982. Momentum is
 the weakest head (loss-space R² 0.41-0.63).
 
-End-to-end (TrainQLweightNN `scripts/validate_qlnn_ukstep26_tjlf.jl`, 1500 database test shots,
+End-to-end (1500 database test shots,
 `run_qlnn` vs `run_tjlf` on the NS=4 database layout with the settings above): Qe/Qi/Ge within a
 factor 2 of TJLF for 69/62/58 % of shots (75/82/72 % of the shots with TJLF flux > 1), within 3x
 for 80/75/74 %, Spearman 0.93/0.93/0.91, median bias -20 %; momentum within 2x for 33 %. The
 largest fluxes are underpredicted (summed Qe ratio 0.53), consistent with the training tail cut.
 Parity figure: `validation_vs_tjlf_1500.png` in this folder (QLNN vs TJLF per channel, 2D log-log
 histograms; the top-left box carries the log-space statistics, the raw-y R² in the bottom-right box is
-outlier-dominated on these heavy tails). Regenerate with TrainQLweightNN
-`scripts/plot_qlnn_vs_tjlf.py --csv models/robust_eval/qlnn_ukstep26_2_vs_tjlf_1500.csv`.
+outlier-dominated on these heavy tails).

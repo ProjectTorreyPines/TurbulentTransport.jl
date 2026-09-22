@@ -1,6 +1,6 @@
 # ---------------------------------------------------------------------------
 # QLNN_ukstep26_2 — TGLF settings of the training database (STEP / ukstep26,
-# runTGLFdb production_run_2, sat1_em_azf-1, OLCF Defiant, Aug 2026).
+# runTGLFdb production_run_2, sat1_em_azf-1, Aug 2026).
 #
 # The switches in the "UK STEP recommended settings" block are the ones the
 # UKAEA STEP team recommends for TGLF on STEP, based on their comparisons with
@@ -15,7 +15,7 @@
 # (1 = e, 2 = D, 3 = T, 4 = one lumped impurity; cases with thermal He ash
 # had it folded into the impurity by lump_he_ukstep26!, charge and Zeff
 # conserving). The NEURAL NETS were trained on the (e, DT, imp) lumping of
-# those inputs (TrainQLweightNN species layout :ukstep26_dt). run_qlnn lumps
+# those inputs (training species layout e, DT, imp). run_qlnn lumps
 # an NS=4/5 input automatically via `qlnn_lump_dt` (AS_2+AS_3; TAUS/RLTS/
 # RLNS/VPAR density-weighted; MASS_2 = density-weighted D/T mass in m_D units,
 # 1.00 for pure D .. 1.25 for 50/50 D-T; impurity slot 4 -> 3). An NS=3
