@@ -1,0 +1,107 @@
+# ---------------------------------------------------------------------------
+# QLNN_d3d_1 — TGLF settings of the training database (DIII-D,
+# production_run_4 / sat3_em_azf-1 corpus, Jul 2026).
+#
+# The switches in the "database settings" block were forced onto every case
+# by the database generator on top of the ig2it-generated
+# input.tglf: SAT_RULE=3 in CGYRO units, electromagnetic (USE_BPER/USE_BPAR),
+# ALPHA_ZF=-1, NBASIS_MAX=6, KYGRID_MODEL=4 / NKY=12, NMODES=2,
+# USE_MHD_RULE=false, USE_AVE_ION_GRID=false. A QLNN prediction is only
+# meaningful with these settings: the QL weights were computed with them, and
+# run_qlnn feeds them through TJLF's saturation rule with the SAT_RULE /
+# ALPHA_ZF / UNITS of the input it is given, so pass them as here.
+#
+# Species layout: NS=3 (1 = e, 2 = D, 3 = carbon with MASS_3 forced to 6.0),
+# i.e. the standard DIII-D (e, D, C) truncation. The nets read 32 inputs
+# (no USE_AVE_ION_GRID feature, no ky-grid canonicalisation); an NS=3 input
+# is used as is. NS > 3 inputs are NOT lumped for this bundle.
+#
+# VEXB_SHEAR: the ig2it inputs of this corpus were generated before the
+# mid-2026 sign fix (vexb_convention = legacy), so VEXB_SHEAR here is
+# opposite in sign to VPAR_SHEAR_1 (TGYRO convention would be same-sign).
+# TurbulentTransport applies the SIGN_BT flip for legacy bundles itself.
+#
+# Physics values below are a real DIII-D case from the database (ModeID
+# summary row 33018, case id 14211620000.5 = DIII-D shot 142116; r/R = 0.208,
+# nominal operating point). VPAR/VPAR_SHEAR of species 2-3 are set equal to
+# species 1 as ig2it does. Replace them with your own; keep the switches.
+# ---------------------------------------------------------------------------
+
+# ---- Database settings (forced on every production_run_4 sat3_em_azf-1 case) ----
+SAT_RULE = 3
+UNITS = 'CGYRO'
+ALPHA_ZF = -1.0
+ALPHA_QUENCH = 0
+NBASIS_MAX = 6
+NBASIS_MIN = 2
+WIDTH = 1.65
+WIDTH_MIN = 0.3
+FILTER = 2.0
+THETA_TRAPPED = 0.7
+USE_BPER = .true.
+USE_BPAR = .true.
+USE_MHD_RULE = .false.
+USE_AVE_ION_GRID = .false.
+KYGRID_MODEL = 4
+NKY = 12
+NMODES = 2
+BETA_LOC = 0.0
+KX0_LOC = 0.0
+
+# ---- Geometry (Miller) ----
+GEOMETRY_FLAG = 1
+RMIN_LOC = 0.566283
+RMAJ_LOC = 2.72037
+ZMAJ_LOC = 0.0164634
+DRMINDX_LOC = 1.0
+DRMAJDX_LOC = -0.135716
+DZMAJDX_LOC = -0.00381497
+Q_LOC = 1.82184
+Q_PRIME_LOC = 16.1217
+P_PRIME_LOC = -0.00135789
+KAPPA_LOC = 1.40752
+S_KAPPA_LOC = 0.171993
+DELTA_LOC = 0.0215949
+S_DELTA_LOC = 0.0309652
+ZETA_LOC = -0.0150317
+S_ZETA_LOC = -0.0542327
+SIGN_BT = -1
+SIGN_IT = 1
+
+# ---- Collisions, pressure, rotation ----
+ZEFF = 1.54182
+XNUE = 0.17095
+DEBYE = 0.029555
+BETAE = 0.00125238
+VEXB_SHEAR = -0.0562763
+ALPHA_MACH = 0.0
+WDIA_TRAPPED = 0.0
+
+# ---- Species (e, D, C) ----
+NS = 3
+ZS_1 = -1
+MASS_1 = 0.000272313
+AS_1 = 1.0
+TAUS_1 = 1.0
+RLNS_1 = 1.14745
+RLTS_1 = 2.1905
+VPAR_1 = 0.200768
+VPAR_SHEAR_1 = 0.492526
+
+ZS_2 = 1
+MASS_2 = 1.0
+AS_2 = 0.864273
+TAUS_2 = 1.16238
+RLNS_2 = 1.0097
+RLTS_2 = 1.46839
+VPAR_2 = 0.200768
+VPAR_SHEAR_2 = 0.492526
+
+ZS_3 = 6
+MASS_3 = 6.0
+AS_3 = 0.0180607
+TAUS_3 = 1.16238
+RLNS_3 = 1.41689
+RLTS_3 = 1.46839
+VPAR_3 = 0.200768
+VPAR_SHEAR_3 = 0.492526

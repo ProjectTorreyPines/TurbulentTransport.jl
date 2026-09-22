@@ -1,0 +1,126 @@
+# ---------------------------------------------------------------------------
+# QLNN_iter (trained as QLNN_iter_8 / sat3tglf_v8) — TGLF settings of the
+# training database (ITER,
+# production_run_4 / sat3_em_azf-1 flux-matching corpus, "sat3_em_iter4",
+# Aug 2026).
+#
+# The switches in the "database settings" block were forced onto every case
+# by the database generator on top of the FUSE
+# flux-matching input.tglf: SAT_RULE=3 in CGYRO units, electromagnetic
+# (USE_BPER/USE_BPAR), ALPHA_ZF=-1, NBASIS_MAX=6, KYGRID_MODEL=4 / NKY=12,
+# NMODES=2, USE_MHD_RULE=false, USE_AVE_ION_GRID=true (note: TRUE for this
+# corpus, unlike the DIII-D QLNN_d3d_1 database). A QLNN prediction is only
+# meaningful with these settings: the QL weights were computed with them, and
+# run_qlnn feeds them through TJLF's saturation rule with the SAT_RULE /
+# ALPHA_ZF / UNITS of the input it is given, so pass them as here.
+#
+# Species layout: the DATABASE ran TGLF with NS=4 unbundled species
+# (1 = e, 2 = D, 3 = T, 4 = one lumped impurity as FUSE builds it from the
+# ITER mix; the FUSE input.tglf also lists a 5th, heavy species which NS=4
+# excludes). The NEURAL NETS were trained on the (e, DT, imp) lumping of
+# those inputs (35 inputs). run_qlnn lumps an NS=4/5 input automatically via
+# `qlnn_lump_dt` (AS_2+AS_3; TAUS/RLTS/RLNS/VPAR density-weighted; MASS_2 =
+# density-weighted D/T mass in m_D units, 1.00 pure D .. 1.25 for 50/50 D-T —
+# MASS_2 varies over the flux-matching history and is a live feature;
+# impurity slot 4 -> 3). An NS=3 (e, DT, imp) input — what FUSE produces with
+# act.ActorTGLF.lump_ions = true — is used as is.
+#
+# VEXB_SHEAR: the inputs of this corpus predate the mid-2026 runTGLFdb sign
+# fix (vexb_convention = legacy): VEXB_SHEAR is opposite in sign to
+# VPAR_SHEAR_1 here (TGYRO convention would be same-sign). TurbulentTransport
+# applies the SIGN_BT flip for legacy bundles itself. VEXB_SHEAR operating
+# points were excluded from training (post-linear quench only) but
+# VEXB_SHEAR remains an input feature.
+#
+# Physics values below are a real case from the database (tglfdb entry
+# input.tglf_000001 at rho = 0.25, flux-matching iteration history of an ITER
+# FUSE case; r/R = 0.086). Replace them with your own; keep the switches.
+# ---------------------------------------------------------------------------
+
+# ---- Database settings (forced on every production_run_4 sat3_em_azf-1 case) ----
+SAT_RULE = 3
+UNITS = 'CGYRO'
+ALPHA_ZF = -1.0
+ALPHA_QUENCH = 0
+NBASIS_MAX = 6
+NBASIS_MIN = 2
+WIDTH = 1.65
+WIDTH_MIN = 0.3
+FILTER = 2.0
+THETA_TRAPPED = 0.7
+USE_BPER = .true.
+USE_BPAR = .true.
+USE_MHD_RULE = .false.
+USE_AVE_ION_GRID = .true.
+KYGRID_MODEL = 4
+NKY = 12
+NMODES = 2
+BETA_LOC = 0.0
+KX0_LOC = 0.0
+
+# ---- Geometry (Miller) ----
+GEOMETRY_FLAG = 1
+RMIN_LOC = 0.280749
+RMAJ_LOC = 3.24762
+ZMAJ_LOC = 0.0
+DRMINDX_LOC = 1.0
+DRMAJDX_LOC = -0.0496851
+DZMAJDX_LOC = 0.0
+Q_LOC = 1.58482
+Q_PRIME_LOC = 3.19815
+P_PRIME_LOC = -0.00400461
+KAPPA_LOC = 1.46264
+S_KAPPA_LOC = 0.0125277
+DELTA_LOC = 0.0731444
+S_DELTA_LOC = 0.0823181
+ZETA_LOC = -0.00941152
+S_ZETA_LOC = -0.00868645
+SIGN_BT = -1
+SIGN_IT = 1
+
+# ---- Collisions, pressure, rotation ----
+ZEFF = 1.49737
+XNUE = 0.000682032
+DEBYE = 0.0573233
+BETAE = 0.0129072
+VEXB_SHEAR = -0.00233299
+ALPHA_MACH = 0.0
+WDIA_TRAPPED = 1.0
+
+# ---- Species (database layout: NS=4 = e, D, T, lumped impurity) ----
+NS = 4
+ZS_1 = -1
+MASS_1 = 0.000272444
+AS_1 = 1.0
+TAUS_1 = 1.0
+RLNS_1 = 0.186701
+RLTS_1 = 0.623344
+VPAR_1 = 0.0860098
+VPAR_SHEAR_1 = 0.0427699
+
+ZS_2 = 1
+MASS_2 = 1.0
+AS_2 = 0.351669
+TAUS_2 = 1.0
+RLNS_2 = 0.0418919
+RLTS_2 = 0.623344
+VPAR_2 = 0.0860098
+VPAR_SHEAR_2 = 0.0427699
+
+ZS_3 = 1
+MASS_3 = 1.49760170089
+AS_3 = 0.351669
+TAUS_3 = 1.0
+RLNS_3 = 0.0418919
+RLTS_3 = 0.623344
+VPAR_3 = 0.0860098
+VPAR_SHEAR_3 = 0.0427699
+
+ZS_4 = 2.79055
+MASS_4 = 2.0719
+AS_4 = 0.105459
+TAUS_4 = 1.0
+RLNS_4 = 0.53002
+RLTS_4 = 0.623344
+VPAR_4 = 0.0860098
+VPAR_SHEAR_4 = 0.0427699
