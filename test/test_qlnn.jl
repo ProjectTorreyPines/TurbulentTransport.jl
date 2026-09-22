@@ -248,9 +248,9 @@ else
     end
 end
 
-# DT-lumped bundle (ukstep26_2): sidecars, automatic D+T lumping, and the NS=3 guard.
+# DT-lumped bundle (QLNN_ukstep26): sidecars, automatic D+T lumping, and the NS=3 guard.
 # Skipped when the bundle directory is absent (e.g. a checkout without LFS content).
-const QLNN_DT_BUNDLE = "QLNN_ukstep26_2"
+const QLNN_DT_BUNDLE = "QLNN_ukstep26"
 
 # (e, D, T, C) NS=4 variant of the sample input: split the D density 70/30 into D and T,
 # move C to slot 4. Mirrors the corpus D-T split (`_apply_stfpp_transform!`).

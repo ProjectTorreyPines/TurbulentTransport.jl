@@ -25,7 +25,7 @@ import LinearAlgebra: BLAS
 # QL_weights for `sum_ky_spectrum` (electrons first; matches `get_sat_params`).
 const _QLNN_SPECIES = ("e", "D", "C")
 # Alternative canonical species set: D+T lumped into one hydrogenic species and a
-# lumped high-Z impurity (ukstep26_2 QLNN heads). Positionally identical to the
+# lumped high-Z impurity (QLNN_ukstep26 heads). Positionally identical to the
 # (e, D, C) set for TJLF packing — slot 2 = main ion, slot 3 = impurity — so a
 # bundle must use exactly one of the two sets.
 const _QLNN_SPECIES_DT = ("e", "DT", "imp")
@@ -269,7 +269,7 @@ end
 Read the `vexb_convention` sidecar file of a QLNN bundle directory (`tgyro` or
 `legacy`). Missing file -> `:tgyro`: QLNN bundles are trained on linear CGYRO
 databases whose inputs come from locpargen (TGYRO convention); TGLF-trained bundles
-(e.g. `QLNN_d3d_1`, `QLNN_ukstep26_2`; ig2it inputs before runTGLFdb 894e2ed) ship a
+(e.g. `QLNN_d3d_1`, `QLNN_ukstep26`; ig2it inputs before runTGLFdb 894e2ed) ship a
 `legacy` sidecar.
 See `_default_vexb_convention`.
 """
@@ -308,7 +308,7 @@ _qlnn_is_dt_lumped(bundle::QLNNbundle) = _qlnn_is_dt_lumped(bundle.energy.ynames
     qlnn_lump_dt(input_tjlf::InputTJLF) -> InputTJLF
 
 Lump an unbundled `(e, D, T, imp[, He])` input (`NS` = 4 or 5) into the `(e, DT, imp)`
-layout (`NS` = 3) that DT-lumped QLNN bundles such as `QLNN_ukstep26_2` were trained on.
+layout (`NS` = 3) that DT-lumped QLNN bundles such as `QLNN_ukstep26` were trained on.
 Returns `input_tjlf` itself when `NS == 3` (already lumped); otherwise a **new** `InputTJLF`
 (the caller's struct is not modified, so TJLF width memory written by `run_qlnn` stays on
 the copy).

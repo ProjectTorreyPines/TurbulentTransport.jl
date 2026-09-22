@@ -102,7 +102,7 @@ can swap between them without rebuilding your problem.
   flux-level TGLF-NN and can additionally reconstruct 2D fluctuation spectra
   (`qlnn_fluctuation_spectra`, with a GPU path via the `CUDA` extension). QLNN bundles
   live in `models/QLNN*` directories. Bundles trained on a D+T-lumped species set
-  (`QLNN_ukstep26_2`: e, DT, imp) lump an unbundled NS=4/5 input automatically
+  (`QLNN_ukstep26`: e, DT, imp) lump an unbundled NS=4/5 input automatically
   (`qlnn_lump_dt`, the inverse of the corpus D-T split); each such bundle ships an
   `input.tglf.template` with the TGLF switches its database ran with.
 

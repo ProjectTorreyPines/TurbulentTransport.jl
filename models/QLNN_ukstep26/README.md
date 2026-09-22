@@ -1,4 +1,4 @@
-# QLNN_ukstep26_2 — STEP quasi-linear-weight NN bundle (DT-lumped)
+# QLNN_ukstep26 — STEP quasi-linear-weight NN bundle (DT-lumped)
 
 TGLF-trained QL-weight heads for the UKAEA STEP design point, from the runTGLFdb
 `ukstep26` corpus (production_run_2, `sat1_em_azf-1`: 69,273 input.gacode slices x 9 radii
