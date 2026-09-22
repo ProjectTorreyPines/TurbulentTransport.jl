@@ -103,7 +103,9 @@ end
 # input.tglf.gen, so the Fortran executable is never launched. These must never be
 # written. USE_PRESETS gates TJLF.apply_presets! and mirrors a hard-coded .TRUE.
 # local in Fortran tglf_startup.f90 that has no input-file plumbing.
-const FORTRAN_TGLF_JULIA_ONLY_FIELDS = (:USE_PRESETS,)
+# The SAT4 saturation coefficients and the collision/trapping free parameters (TJLF >= 2.1) are
+# TJLF-only inputs as well: Fortran TGLF has no SAT_RULE=4 and rejects the keys.
+const FORTRAN_TGLF_JULIA_ONLY_FIELDS = (:USE_PRESETS, :C_NORM, :C_EXP, :C_COEFF, :C_ETG, :C_B, :SIG_B, :BOUNCE_COEFF)
 
 """
     save(input::Union{InputTGLF, InputCGYRO, InputQLGYRO}, filename::AbstractString)

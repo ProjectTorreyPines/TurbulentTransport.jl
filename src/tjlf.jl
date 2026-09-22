@@ -283,13 +283,13 @@ end
     tjlf_compatible(input_tglf::InputTGLF)
 
 Return `input_tglf`, or a copy of it with `UNITS="CGYRO"`, ready for conversion to
-`InputTJLF`. TJLF defines `SAT_RULE` 2 and 3 in CGYRO units only and rejects a GYRO
+`InputTJLF`. TJLF defines `SAT_RULE` 2, 3 and 4 in CGYRO units only and rejects a GYRO
 input as soon as the `InputTJLF` is built (`checkInput` runs inside
 `update_input_tjlf!`, before any presets). Fortran TGLF's `USE_PRESETS=.TRUE.` switches
 the units silently; do the same here so SAT2/3 inputs in GYRO units keep working.
 """
 function tjlf_compatible(input_tglf::InputTGLF)
-    if input_tglf.SAT_RULE in (2, 3) && input_tglf.UNITS == "GYRO" && input_tglf.USE_PRESETS
+    if input_tglf.SAT_RULE in (2, 3, 4) && input_tglf.UNITS == "GYRO" && input_tglf.USE_PRESETS
         input_tglf = deepcopy(input_tglf)
         input_tglf.UNITS = "CGYRO"
     end

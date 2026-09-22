@@ -243,7 +243,7 @@ function InputTGLF(
     input_tglf.ALPHA_QUENCH = 0 # 0 = spectral shift, 1 = quench
     input_tglf.SAT_RULE = parse(Int, split(string(sat), "sat")[end][1]) # Parsing will fail for double digit sat rules
     
-    if sat == :sat2 || sat == :sat3
+    if sat in (:sat2, :sat3, :sat4)   # SAT4 (TJLF-only) shares the SAT2/3 linear physics and presets
         input_tglf.UNITS = "CGYRO"
         input_tglf.KYGRID_MODEL = 4
         input_tglf.NBASIS_MIN = 2
@@ -383,7 +383,7 @@ export run_tglf
 Applies the same preset rules as TGLF Fortran for consistency:
 
 1. SAT_RULE specific settings:
-   - SAT_RULE = 2 or 3:
+   - SAT_RULE = 2, 3 or 4 (4 = TJLF-only SAT4):
      * XNU_MODEL = 3
      * WDIA_TRAPPED = 1.0
      * If UNITS = "GYRO", changes to "CGYRO"
@@ -400,7 +400,7 @@ Applies the same preset rules as TGLF Fortran for consistency:
 """
 function apply_presets!(input_tglf::InputTGLF)
     # Handle SAT_RULE specific settings
-    if input_tglf.SAT_RULE == 2 || input_tglf.SAT_RULE == 3
+    if input_tglf.SAT_RULE in (2, 3, 4)
         input_tglf.XNU_MODEL = 3
         input_tglf.WDIA_TRAPPED = 1.0
         if input_tglf.UNITS == "GYRO"
