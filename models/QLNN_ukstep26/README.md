@@ -1,7 +1,7 @@
 # QLNN_ukstep26 — STEP quasi-linear-weight NN bundle (DT-lumped)
 
-TGLF-trained QL-weight heads for the UKAEA STEP design point, from the runTGLFdb
-`ukstep26` corpus (production_run_2, `sat1_em_azf-1`: 69,273 input.gacode slices x 9 radii
+TGLF-trained QL-weight heads for the UKAEA STEP design point, from the `ukstep26` TGLF
+corpus (`sat1_em_azf-1`: 69,273 input.gacode slices x 9 radii
 0.1..0.9, ±1 major scans of RLTS_1 / RLTS_23 / RLNS_12, 11-run minor stencil incl. VEXB_SHEAR
 and BETAE, ~5.3 M TGLF runs, Aug 2026). Training tag `ukstep26tglf_v2` (20-member
 ensembles, 500 epochs, residual MLP 4x64).
@@ -15,7 +15,7 @@ ensembles, 500 epochs, residual MLP 4x64).
 | `stability_classifier.bson` | P(unstable) | 1 |
 | `width_regressor.bson` | Gaussian width | 1 (37 inputs) |
 | `momentum_sign` | `+1` — TJLF-native sign, as QLNN_d3d_1 | |
-| `vexb_convention` | `legacy` — ig2it inputs generated before runTGLFdb 894e2ed | |
+| `vexb_convention` | `legacy` — ig2it inputs generated before its mid-2026 sign fix | |
 | `input.tglf.template` | the TGLF switches the database ran with + a real STEP case | |
 
 ## TGLF settings (UK STEP recommended)

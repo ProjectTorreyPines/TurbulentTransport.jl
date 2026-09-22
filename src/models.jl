@@ -340,7 +340,7 @@ Models whose training corpus carried `VEXB_SHEAR` in the TGYRO/locpargen convent
 model without an explicit `vexb_convention` key in its BSON is taken to be `:legacy`
 (`VEXB_SHEAR = -gamma_e*a/c_s` with signed q, i.e. `SIGN_BT` times the TGYRO value),
 which is what `InputTGLF(dd, ...)` produced before TurbulentTransport 1.4 and what
-atom-omfit `ig2it` produced before runTGLFdb 894e2ed. The two differ only on devices
+atom-omfit `ig2it` produced before its mid-2026 sign fix. The two differ only on devices
 with `SIGN_BT = -1` (ITER in FUSE, DIII-D, MAST-U, NSTX).
 
 The list was derived from the sign of the stored input mean `xm[VEXB_SHEAR]` relative
@@ -364,7 +364,7 @@ const _VEXB_TGYRO_MODELS = Set{String}([
     "sat3_em_d3d_azf+1_qlnn", "sat3_em_d3d_azf-1_qlnn",
     # ModeID trained on QLGYRO labels
     "modeid_qlgyro_sat3_azf-1",
-    # ST edge / near-edge nets (ig2it-corrected corpora, runTGLFdb >= 894e2ed)
+    # ST edge / near-edge nets (ig2it-corrected corpora, mid-2026 onwards)
     "sat3_em_mastuedge+nstxedge_azf-1_withnegD",
     "sat3_em_mastunearedge+nstxnearedge_azf-1_withnegD",
 ])

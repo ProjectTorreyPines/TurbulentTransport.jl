@@ -269,7 +269,7 @@ end
 Read the `vexb_convention` sidecar file of a QLNN bundle directory (`tgyro` or
 `legacy`). Missing file -> `:tgyro`: QLNN bundles are trained on linear CGYRO
 databases whose inputs come from locpargen (TGYRO convention); TGLF-trained bundles
-(e.g. `QLNN_d3d_1`, `QLNN_ukstep26`; ig2it inputs before runTGLFdb 894e2ed) ship a
+(e.g. `QLNN_d3d_1`, `QLNN_ukstep26`; ig2it inputs before its mid-2026 sign fix) ship a
 `legacy` sidecar.
 See `_default_vexb_convention`.
 """
@@ -314,7 +314,7 @@ Returns `input_tjlf` itself when `NS == 3` (already lumped); otherwise a **new**
 the copy).
 
 This is the inverse of the training-corpus D-T split (`_apply_stfpp_transform!` here,
-`unbundle_dt` in runTGLFdb) and matches the DT bundling used at training time, i.e. the
+the D/T split of the database generator) and matches the DT bundling used at training time, i.e. the
 IMAS `lump_ions_as_bulk_and_impurity` convention applied to the two hydrogenic species:
 
     AS_2   = AS_2 + AS_3                      densities sum
@@ -324,7 +324,7 @@ IMAS `lump_ions_as_bulk_and_impurity` convention applied to the two hydrogenic s
     slot 3 = old slot 4 (the lumped impurity)
 
 With `NS == 5` the fifth species (thermal He ash in the STEP corpus) is first folded into
-the impurity exactly as runTGLFdb's `lump_he_ukstep26!` did when the database was built:
+the impurity exactly as the database generator did when the STEP corpus was built:
 charge density and Zeff are conserved (`Z' = Σ n Z² / Σ n Z`, `n' = (Σ n Z)² / Σ n Z²`),
 mass, temperature and rotation are density-weighted, and the density gradient is
 charge-weighted.

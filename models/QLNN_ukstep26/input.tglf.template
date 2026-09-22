@@ -1,12 +1,11 @@
 # ---------------------------------------------------------------------------
 # QLNN_ukstep26 — TGLF settings of the training database (STEP / ukstep26,
-# runTGLFdb production_run_2, sat1_em_azf-1, Aug 2026).
+# sat1_em_azf-1 corpus, Aug 2026).
 #
 # The switches in the "UK STEP recommended settings" block are the ones the
 # UKAEA STEP team recommends for TGLF on STEP, based on their comparisons with
 # nonlinear gyrokinetic (CGYRO/GENE) runs. They were forced onto every case by
-# runTGLFdb (src/runTGLFdb.jl `run_tglf`, device == "ukstep26") on top of the
-# ig2it-generated input.tglf. A QLNN prediction is only meaningful with these
+# the database generator on top of the ig2it-generated input.tglf. A QLNN prediction is only meaningful with these
 # settings: the QL weights were computed with NBASIS_MAX=10 / WIDTH=1.9 /
 # THETA_TRAPPED(r/R), and run_qlnn feeds them through TJLF's SAT_RULE=1 rule
 # with the ALPHA_ZF / UNITS of the input.
@@ -28,7 +27,7 @@
 # with your own; keep the switches.
 # ---------------------------------------------------------------------------
 
-# ---- UK STEP recommended settings (forced by runTGLFdb for device ukstep26) ----
+# ---- UK STEP recommended settings (forced on every ukstep26 database case) ----
 SAT_RULE = 1
 UNITS = 'GYRO'
 ALPHA_ZF = -1.0

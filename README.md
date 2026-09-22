@@ -125,7 +125,7 @@ Two conventions for the sign of `VEXB_SHEAR` exist in the training corpora. Turb
 works internally in the **TGYRO / locpargen** convention, `VEXB_SHEAR = -SIGN_BT * gamma_e * a/c_s`
 (equivalently `VPAR_SHEAR_1 * r/(|q| R)`, i.e. the same sign as `VPAR_SHEAR_1`): this is what
 `InputTGLF(dd, ...)` writes since v1.4 and what `input.tglf` files written by `profiles_gen`/`ig2it`
-(runTGLFdb >= 894e2ed) contain. Older corpora — FUSE-generated inputs before v1.4 and atom-omfit
+(corrected `ig2it`, mid-2026 onwards) contain. Older corpora — FUSE-generated inputs before v1.4 and atom-omfit
 `ig2it` outputs — carry the **legacy** sign `-gamma_e * a/c_s` with signed `q`, which equals
 `SIGN_BT` times the TGYRO value and therefore differs only on devices with `SIGN_BT = -1`
 (ITER in FUSE, DIII-D, MAST-U, NSTX).
