@@ -159,6 +159,9 @@ near-edge net for `0.881 <= RMIN_LOC < 0.975` and by the edge net beyond. Famili
 variants: `sat{0quench,1,2,3}_em_d3d_azf±1_withnegD` (`d3dnearedge` / `d3dedge`) and the
 spherical-tokamak `sat3_em_mastu+nstx_azf-1_withnegD` (`mastunearedge+nstxnearedge` /
 `mastuedge+nstxedge`, joint MAST-U + NSTX, positive and negative triangularity).
+The `mastuedge+nstxedge` / `mastunearedge+nstxnearedge` nets shipped since v1.4.1 are retrained on
+the corrected ST edge corpora (boron / nitrogen impurity reruns of the ST edge and near-edge databases);
+the 2026-08-30 files (v1.3.1 to v1.4.0) were trained before that correction.
 
 List what is installed with `available_models()` (TGLF-NN / GKNN model files) and
 `available_qlnn_bundles()` (QLNN bundle directories).
