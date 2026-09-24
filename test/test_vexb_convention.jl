@@ -42,6 +42,7 @@ _same(a, b) = all(isapprox.(_fluxes(a), _fluxes(b); rtol=REGRESSION_RTOL))
         @test loadmodel("sat3_em_d3d_azf-1_gknne24").vexb_convention === :tgyro
         @test loadmodel("sat3_em_mastuedge+nstxedge_azf-1_withnegD").vexb_convention === :tgyro
         @test TurbulentTransport.load_modeid_model(TEST_MODEID_MODEL).vexb_convention === :tgyro
+        @test TurbulentTransport.load_modeid_model(TEST_MODEID_TGLF_MODEL).vexb_convention === :legacy   # key in the bson
         # explicit key wins over the table
         d = Dict{Any,Any}(k => v for (k, v) in TurbulentTransport.mod2dict(loadmodel("sat3_em_d3d_azf-1").models[1]))
         d[:vexb_convention] = :tgyro

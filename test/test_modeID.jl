@@ -54,6 +54,18 @@
             @test !isempty(sprint(show, MIME"text/plain"(), model.models[1]))
         end
     end
+    @testset "TGLF-labelled DIII-D model loads alongside the QLGYRO one" begin
+        # Different label fidelity (TGLF classify_modes_core vs QLGYRO); both stay shipped.
+        model = TurbulentTransport.load_modeid_model(TEST_MODEID_TGLF_MODEL)
+        @test model isa TurbulentTransport.ModeIDensemble
+        @test length(model.models) == 20
+        @test length(model.xnames) == MODEID_N_INPUTS
+        @test model.ynames == MODEID_YNAMES
+        # the BSON carries the VEXB_SHEAR convention tag on every member
+        @test all(m.vexb_convention === :legacy for m in model.models)
+        ref = TurbulentTransport.load_modeid_model(TEST_MODEID_MODEL)
+        @test model.xnames == ref.xnames
+    end
 end
 
 @testset "ModeID prediction" begin

@@ -340,6 +340,7 @@ const TEST_FINN_MODEL = "finn_sat3_d3d_withnegD"
 # ============================================
 
 const TEST_MODEID_MODEL = "modeid_qlgyro_sat3_azf-1"
+const TEST_MODEID_TGLF_MODEL = "modeid_tglf_sat3_azf-1_d3d"   # TGLF-labelled DIII-D model, legacy VEXB sign
 const MODEID_N_INPUTS = 34
 const MODEID_N_CLASSES = 5
 const MODEID_YNAMES = ["ETG", "ITG", "KBM", "MTM", "TEM"]  # alphabetical order
