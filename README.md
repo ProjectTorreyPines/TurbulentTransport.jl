@@ -162,6 +162,9 @@ spherical-tokamak `sat3_em_mastu+nstx_azf-1_withnegD` (`mastunearedge+nstxneared
 The `mastuedge+nstxedge` / `mastunearedge+nstxnearedge` nets shipped since v1.4.1 are retrained on
 the corrected ST edge corpora (boron / nitrogen impurity reruns of the ST edge and near-edge databases);
 the 2026-08-30 files (v1.3.1 to v1.4.0) were trained before that correction.
+NSTX-only edge and near-edge nets (`sat3_em_nstxedge_azf-1_withnegD`,
+`sat3_em_nstxnearedge_azf-1_withnegD`, positive and negative triangularity) are available as
+standalone models; they are not part of a radial-blend family yet.
 
 List what is installed with `available_models()` (TGLF-NN / GKNN model files) and
 `available_qlnn_bundles()` (QLNN bundle directories).

@@ -367,6 +367,9 @@ const _VEXB_TGYRO_MODELS = Set{String}([
     # ST edge / near-edge nets (ig2it-corrected corpora, mid-2026 onwards)
     "sat3_em_mastuedge+nstxedge_azf-1_withnegD",
     "sat3_em_mastunearedge+nstxnearedge_azf-1_withnegD",
+    # NSTX-only ST edge / near-edge nets
+    "sat3_em_nstxedge_azf-1_withnegD",
+    "sat3_em_nstxnearedge_azf-1_withnegD",
 ])
 
 const _VEXB_CONVENTIONS = (:tgyro, :legacy)
