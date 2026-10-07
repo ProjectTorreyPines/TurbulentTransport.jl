@@ -354,13 +354,14 @@ end
 end
 
 @testset "run_tglfnn radial-dependent models" begin
-    # Test models with radial-dependent blending (d3d, d3dnearedge, d3dedge variants)
+    # Test models with radial-dependent blending (core, near-edge, edge variants); keep in sync with _RADIAL_BLEND_VARIANTS
     radial_models = (
         "sat0quench_em_d3d_azf+1_withnegD",
         "sat1_em_d3d_azf-1_withnegD",
         "sat2_em_d3d_azf-1_withnegD",
         "sat3_em_d3d_azf-1_withnegD",
-        "sat3_em_mastu+nstx_azf-1_withnegD"
+        "sat3_em_mastu+nstx_azf-1_withnegD",
+        "sat3_em_nstx_azf-1_withnegD"
     )
     @test Set(keys(TurbulentTransport._RADIAL_BLEND_VARIANTS)) == Set(radial_models)
 
