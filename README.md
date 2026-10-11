@@ -140,6 +140,11 @@ even when a GKNN correction or a radial-blend variant of the other convention sh
 The low-level `flux_array` takes its input matrix as already being in the model's convention.
 Dictionary inputs are flipped only when a `"SIGN_BT"` entry is supplied.
 
+### `yscale` models
+
+Some models carry a per-output `yscale` vector; the matching inverse transform is applied
+inside `flux_array`, so no caller-side action is needed. Models without the key are unchanged.
+
 ### Model naming and discovery
 
 Trained TGLF-NN / GKNN models follow the convention

@@ -28,6 +28,10 @@ struct TGLFNNmodel <: TGLFmodel
     yσ::Vector{Float64}
     xbounds::Array{Float64}
     ybounds::Array{Float64}
+    # Per-output output scale: empty = plain linear denormalization; otherwise
+    # `flux = yscale * sinh(z*yσ + ym)`. Serialized when present; defaulted to empty
+    # when loading older BSONs.
+    yscale::Vector{Float64}
     nions::Int
     # Sign convention of the VEXB_SHEAR training feature: `:tgyro` or `:legacy`
     # (see `_default_vexb_convention`). Serialized when present; defaulted from the
@@ -204,6 +208,9 @@ function dict2mod(savedict::AbstractDict; model_basename::AbstractString="")
         elseif name == :nions
             nions = maximum(map(m -> parse(Int, m[1]), filter(!isnothing, match.(r"_([0-9]+$)", savedict[:xnames])))) - 1
             push!(args, nions)
+        elseif name === :yscale
+            # optional key; absent = linear denormalization only
+            push!(args, haskey(savedict, name) ? Float64.(vec(savedict[name])) : Float64[])
         elseif name === :vexb_convention
             # optional key (written by trainers >= 2026-09); older files fall back to the table
             if haskey(savedict, name)
@@ -338,13 +345,22 @@ Processes `[N_features, M_samples]` matrix through the model and writes results 
     if fidelity == :GKNN
         return out_y
     elseif fidelity == :TGLFNN
-        # Denormalize outputs: out_y * yσ + ym
+        # Denormalize outputs: out_y * yσ + ym, then for
+        # yscale models: yscale * sinh(.)
         nouts = size(out_y, 1)
+        ys = fluxmodel.yscale
         @inbounds for i in 1:nouts
             ym_i = fluxmodel.ym[i]
             yσ_i = fluxmodel.yσ[i]
-            for j in 1:M
-                out_y[i, j] = out_y[i, j] * yσ_i + ym_i
+            if isempty(ys)
+                for j in 1:M
+                    out_y[i, j] = out_y[i, j] * yσ_i + ym_i
+                end
+            else
+                ys_i = ys[i]
+                for j in 1:M
+                    out_y[i, j] = ys_i * sinh(out_y[i, j] * yσ_i + ym_i)
+                end
             end
         end
         return out_y
@@ -403,8 +419,12 @@ Processes one input vector through the model and writes results to `out_y`.
     if fidelity == :GKNN
         return out_y
     elseif fidelity == :TGLFNN
-        # Denormalize outputs: out_y * yσ + ym
+        # Denormalize outputs: out_y * yσ + ym, then for
+        # yscale models: yscale * sinh(.)
         @. out_y = out_y * fluxmodel.yσ + fluxmodel.ym
+        if !isempty(fluxmodel.yscale)
+            @. out_y = fluxmodel.yscale * sinh(out_y)
+        end
         return out_y
     else
         error("Unknown fidelity mode: $fidelity. Expected :GKNN or :TGLFNN")
