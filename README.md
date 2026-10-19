@@ -170,6 +170,8 @@ the 2026-08-30 files (v1.3.1 to v1.4.0) were trained before that correction.
 The NSTX-only family `sat3_em_nstx_azf-1_withnegD` (`nstxnearedge` / `nstxedge`, positive and
 negative triangularity) is blended the same way; its core net is trained on the corrected
 (TGYRO-sign) VEXB_SHEAR corpus, so the family is `:tgyro` throughout.
+The MAST-U-only family `sat3_em_mastu_azf-1_withnegD` (`mastunearedge` / `mastuedge`, positive and
+negative triangularity) is built the same way and is also `:tgyro` throughout.
 
 List what is installed with `available_models()` (TGLF-NN / GKNN model files) and
 `available_qlnn_bundles()` (QLNN bundle directories).

@@ -361,7 +361,8 @@ end
         "sat2_em_d3d_azf-1_withnegD",
         "sat3_em_d3d_azf-1_withnegD",
         "sat3_em_mastu+nstx_azf-1_withnegD",
-        "sat3_em_nstx_azf-1_withnegD"
+        "sat3_em_nstx_azf-1_withnegD",
+        "sat3_em_mastu_azf-1_withnegD"
     )
     @test Set(keys(TurbulentTransport._RADIAL_BLEND_VARIANTS)) == Set(radial_models)
 

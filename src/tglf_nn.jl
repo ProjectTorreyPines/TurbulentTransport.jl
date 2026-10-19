@@ -657,6 +657,9 @@ const _RADIAL_BLEND_VARIANTS = Dict{String,Tuple{String,String,Float64,Float64}}
     # NSTX alone (PT + NT)
     "sat3_em_nstx_azf-1_withnegD" => ("sat3_em_nstxnearedge_azf-1_withnegD", "sat3_em_nstxedge_azf-1_withnegD",
         _RADIAL_BLEND_NEAREDGE_RMIN, _RADIAL_BLEND_EDGE_RMIN),
+    # MAST-U alone (PT + NT)
+    "sat3_em_mastu_azf-1_withnegD" => ("sat3_em_mastunearedge_azf-1_withnegD", "sat3_em_mastuedge_azf-1_withnegD",
+        _RADIAL_BLEND_NEAREDGE_RMIN, _RADIAL_BLEND_EDGE_RMIN),
 )
 
 """

@@ -371,6 +371,10 @@ const _VEXB_TGYRO_MODELS = Set{String}([
     "sat3_em_nstx_azf-1_withnegD",
     "sat3_em_nstxedge_azf-1_withnegD",
     "sat3_em_nstxnearedge_azf-1_withnegD",
+    # MAST-U-only ST core / near-edge / edge nets
+    "sat3_em_mastu_azf-1_withnegD",
+    "sat3_em_mastuedge_azf-1_withnegD",
+    "sat3_em_mastunearedge_azf-1_withnegD",
 ])
 
 const _VEXB_CONVENTIONS = (:tgyro, :legacy)
