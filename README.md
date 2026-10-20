@@ -163,7 +163,8 @@ evaluation time: each radial point is served by the core net for `RMIN_LOC < 0.8
 near-edge net for `0.881 <= RMIN_LOC < 0.975` and by the edge net beyond. Families with
 variants: `sat{0quench,1,2,3}_em_d3d_azf±1_withnegD` (`d3dnearedge` / `d3dedge`) and the
 spherical-tokamak `sat3_em_mastu+nstx_azf-1_withnegD` (`mastunearedge+nstxnearedge` /
-`mastuedge+nstxedge`, joint MAST-U + NSTX, positive and negative triangularity).
+`mastuedge+nstxedge`, joint MAST-U + NSTX, positive and negative triangularity); since v1.5.0 its
+core net is also `:tgyro`, so the family is `:tgyro` throughout.
 The `mastuedge+nstxedge` / `mastunearedge+nstxnearedge` nets shipped since v1.4.1 are retrained on
 the corrected ST edge corpora (boron / nitrogen impurity reruns of the ST edge and near-edge databases);
 the 2026-08-30 files (v1.3.1 to v1.4.0) were trained before that correction.

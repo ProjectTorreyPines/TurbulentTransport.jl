@@ -364,7 +364,8 @@ const _VEXB_TGYRO_MODELS = Set{String}([
     "sat3_em_d3d_azf+1_qlnn", "sat3_em_d3d_azf-1_qlnn",
     # ModeID trained on QLGYRO labels
     "modeid_qlgyro_sat3_azf-1",
-    # ST edge / near-edge nets (ig2it-corrected corpora, mid-2026 onwards)
+    # Joint MAST-U + NSTX ST core / near-edge / edge nets (ig2it-corrected corpora, mid-2026 onwards)
+    "sat3_em_mastu+nstx_azf-1_withnegD",
     "sat3_em_mastuedge+nstxedge_azf-1_withnegD",
     "sat3_em_mastunearedge+nstxnearedge_azf-1_withnegD",
     # NSTX-only ST core / near-edge / edge nets

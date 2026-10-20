@@ -27,7 +27,7 @@ _same(a, b) = all(isapprox.(_fluxes(a), _fluxes(b); rtol=REGRESSION_RTOL))
         @test _default_vexb_convention("sat3_em_d3d_azf-1_gknne24") === :tgyro
         @test _default_vexb_convention("sat3_em_d3d_azf-1_withnegD_gknn37") === :tgyro
         @test _default_vexb_convention("sat3_em_mastuedge+nstxedge_azf-1_withnegD") === :tgyro
-        @test _default_vexb_convention("sat3_em_mastu+nstx_azf-1_withnegD") === :legacy
+        @test _default_vexb_convention("sat3_em_mastu+nstx_azf-1_withnegD") === :tgyro
         @test _default_vexb_convention("modeid_qlgyro_sat3_azf-1") === :tgyro
         @test _default_vexb_convention("some_future_model") === :legacy
         # every listed name is a shipped model
@@ -101,17 +101,16 @@ _same(a, b) = all(isapprox.(_fluxes(a), _fluxes(b); rtol=REGRESSION_RTOL))
     end
 
     @testset "mixed conventions inside one call" begin
-        # ST family: core net is :legacy, its radial variants are :tgyro
+        # ST family: core and radial variants are all :tgyro -> no flip in either region
         core_name = "sat3_em_mastu+nstx_azf-1_withnegD"
         nearedge_name, edge_name, r_ne, r_e = TurbulentTransport.radial_blend_variants(core_name)
         core = loadmodel(core_name); edge = loadmodel(edge_name)
-        @test core.vexb_convention === :legacy
+        @test core.vexb_convention === :tgyro
         @test edge.vexb_convention === :tgyro
         it_core = deepcopy(it); it_core.RMIN_LOC = 0.5
         it_edge = deepcopy(it); it_edge.RMIN_LOC = 0.99
         sols = TurbulentTransport.run_tglfnn([it_core, it_edge]; model_filename=core_name, warn_nn_train_bounds=false)
-        xc = _features(core, it_core); xc[_vexb_row(core.xnames)] *= it.SIGN_BT
-        @test _same(sols[1], _solution(core, xc))
+        @test _same(sols[1], _solution(core, _features(core, it_core)))   # no flip
         @test _same(sols[2], _solution(edge, _features(edge, it_edge)))   # no flip
 
         # mixed SIGN_BT columns in one GKNN batch == singles
