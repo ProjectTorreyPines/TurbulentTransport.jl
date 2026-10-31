@@ -864,7 +864,8 @@ Returns a vector of `flux_solution` structures
                 gk_inputs[1:end-4, :] = _vexb_input(gkdb, inputs, inputs_legacy)
                 gk_inputs[end-3:end, :] = tmp
                 gkdb_err = flux_array(gkdb, gk_inputs; uncertain, warn_nn_train_bounds, fidelity)
-                tmp .*= gkdb_err
+                # the CGYRO-trained net is an ion heat flux correction only: outputs are [G_elec, P_ions, Q_elec, Q_ions]
+                tmp[4, :] .*= gkdb_err[4, :]
             end
         elseif model_filename == "sat3_em_d3d+mastu_azf-1"
             gk_inputs = acquire_view!(pool, T, size(inputs, 1) + 4, size(inputs, 2))
@@ -975,7 +976,8 @@ function run_tglfnn(data::Dict; model_filename::String, uncertain::Bool=false, w
             if model_filename == "sat3_em_d3d_azf-1_gkdb"
                 gkdb = loadmodelonce(model_filename * "_gknn31_cgyro")
                 gkdb_err = gkdb(vcat(_vexb_input(gkdb, x, x_legacy), y)...; uncertain, warn_nn_train_bounds, fidelity)
-                y .*= gkdb_err
+                # the CGYRO-trained net is an ion heat flux correction only: outputs are [G_elec, P_ions, Q_elec, Q_ions]
+                y[4] *= gkdb_err[4]
             end
         elseif model_filename == "sat3_em_d3d+mastu_azf-1"
             gknn = loadmodelonce(model_filename * "_gknn36")

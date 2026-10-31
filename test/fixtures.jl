@@ -253,24 +253,24 @@ const REGRESSION_EXPECTED_VALUES = Dict(
         STRESS_TOR_i = 5.187377472078515,
     ),
 
-    # sat3_em_d3d_azf-1_gkdb, fidelity=:GKNN (gknn31 + cgyro branch)
+    # sat3_em_d3d_azf-1_gkdb, fidelity=:GKNN (gknn31 on all channels + cgyro ion heat flux correction)
     ("sat3_em_d3d_azf-1_gkdb", :GKNN, 1) => (
-        ENERGY_FLUX_e = 0.18060817026130743,
-        ENERGY_FLUX_i = 3.8590266689462274,
-        PARTICLE_FLUX_e = -0.13249063806797146,
-        STRESS_TOR_i = -2.0000705489486386,
+        ENERGY_FLUX_e = 2.0441457451405447,
+        ENERGY_FLUX_i = 3.8590266689462243,
+        PARTICLE_FLUX_e = 0.3127717369389833,
+        STRESS_TOR_i = 3.455981657357478,
     ),
     ("sat3_em_d3d_azf-1_gkdb", :GKNN, 2) => (
-        ENERGY_FLUX_e = 0.05336854092681487,
-        ENERGY_FLUX_i = 0.9973791034564599,
-        PARTICLE_FLUX_e = 0.010773943426737716,
-        STRESS_TOR_i = -0.3259587358358478,
+        ENERGY_FLUX_e = 0.8415245603819728,
+        ENERGY_FLUX_i = 0.9973791034564594,
+        PARTICLE_FLUX_e = -0.02862164442267792,
+        STRESS_TOR_i = 0.8073217886815462,
     ),
     ("sat3_em_d3d_azf-1_gkdb", :GKNN, 3) => (
-        ENERGY_FLUX_e = 0.3065487347792778,
-        ENERGY_FLUX_i = 7.495995814992572,
-        PARTICLE_FLUX_e = -0.17521143467070988,
-        STRESS_TOR_i = -2.989582771207009,
+        ENERGY_FLUX_e = 2.922706922544521,
+        ENERGY_FLUX_i = 7.49599581499257,
+        PARTICLE_FLUX_e = 0.7315935431487317,
+        STRESS_TOR_i = 4.780893765420086,
     ),
 
     # sat3_em_d3d_azf-1_withnegD, fidelity=:GKNN (gknn31 for core, gknn37 for nearedge/edge)
