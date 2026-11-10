@@ -4,8 +4,8 @@
 # TurbulentTransport.jl
 
 TurbulentTransport.jl runs tokamak turbulent-transport models from a common
-interface: the first-principles codes **TGLF**, **TJLF** (the Julia
-reimplementation), and **QLGYRO**, and a family of fast **neural-network
+interface: the first-principles codes **TGLF**, **TGLF.jl** (the Julia
+implementation of TGLF), and **QLGYRO**, and a family of fast **neural-network
 surrogates** (TGLF-NN, GKNN, QLNN, FINN, ModeID-NN) trained to reproduce them in
 milliseconds. It builds the model inputs directly from IMAS data structures, so
 it plugs straight into FUSE and related ProjectTorreyPines tools.
@@ -55,7 +55,7 @@ to discover the best-fitting model for your case before committing to a
 In-repo notebooks (the place to start):
 
 - [`examples/run_TGLFNN.ipynb`](https://github.com/ProjectTorreyPines/TurbulentTransport.jl/blob/master/examples/run_TGLFNN.ipynb)
-  — **start here**: write/load an `input.tglf`, run TGLF / TJLF / TGLF-NN, use
+  — **start here**: write/load an `input.tglf`, run TGLF / TGLF.jl / TGLF-NN, use
   `model_selector`, and a ForwardDiff sensitivity demo.
 - [`examples/uncertainty_input_output.ipynb`](https://github.com/ProjectTorreyPines/TurbulentTransport.jl/blob/master/examples/uncertainty_input_output.ipynb)
   — propagate input/output uncertainty using NN ensembles and `Measurements.jl`.
@@ -97,7 +97,7 @@ can swap between them without rebuilding your problem.
 
 - **QLNN** (`run_qlnn`, `loadqlnnbundle`) — predicts per-`ky` **quasi-linear weights and
   eigenvalues** (energy / particle / momentum / eigenvalue regressors, plus an optional
-  stability classifier) and feeds them through TJLF's saturation rule, so `SAT_RULE`,
+  stability classifier) and feeds them through TGLF.jl's saturation rule, so `SAT_RULE`,
   `ALPHA_ZF`, and `UNITS` from the input still apply. This is more physics-faithful than
   flux-level TGLF-NN and can additionally reconstruct 2D fluctuation spectra
   (`qlnn_fluctuation_spectra`, with a GPU path via the `CUDA` extension). QLNN bundles
@@ -113,9 +113,9 @@ can swap between them without rebuilding your problem.
 - **ModeID** (`run_modeid_nn`, `run_modeid_qlnn`) — classifies the **dominant turbulence
   mode** (ITG / TEM / KBM / ETG / MTM) at each radius. `run_modeid_nn` is a direct softmax
   classifier from TGLF inputs; `run_modeid_qlnn` derives the mode from QLNN QL-weight
-  ratios and eigenvalue frequency, mirroring TJLF's `identify_modes`.
+  ratios and eigenvalue frequency, mirroring TGLF.jl's `identify_modes`.
 
-The first-principles drivers `run_tglf` (Fortran TGLF), `run_tjlf` (Julia TJLF), and
+The first-principles drivers `run_tglf` (Fortran TGLF), `run_tjlf` (TGLF.jl), and
 `run_qlgyro` (QLGYRO) share the same input types and `FluxSolution` outputs, which makes
 them convenient ground truth for the surrogates.
 
@@ -182,7 +182,7 @@ List what is installed with `available_models()` (TGLF-NN / GKNN model files) an
 With many models available, `model_selector` is the recommended way to choose one. Given
 an ODS path (or an `IMAS.dd`) and a `rho_grid`, it runs the available TGLF-NN models, then
 ranks them per radius by confidence (ensemble uncertainty) and — when `ground_truth=true`
-(default) — by accuracy against TJLF / Fortran TGLF, returning the top `max_models`:
+(default) — by accuracy against TGLF.jl / Fortran TGLF, returning the top `max_models`:
 
 ```julia
 results = model_selector("path/to/ods.json"; rho_grid=range(0.1, 0.9, 9))
@@ -209,11 +209,11 @@ GACODE-style command-line drivers in `bin/` run a simulation directory through t
 Julia implementations:
 
 ```bash
-tjlf   -e .     # run TJLF on input.tglf/input.tjlf in the current directory
+tjlf   -e .     # run TGLF.jl on input.tglf/input.tjlf in the current directory
 qlgyro -e .     # run QLGYRO
 ```
 
-## Use in FUSE, TJLF, and TJLFEP
+## Use in FUSE, TGLF.jl, and TGLFEP.jl
 
 - **FUSE** drives these models through its transport actors: `ActorTGLF` calls
   `run_tglfnn` / `run_tglfnn_onnx` / `run_qlnn`, the flux matcher uses the
@@ -221,11 +221,13 @@ qlgyro -e .     # run QLGYRO
   `ActorQLGYRO`, and `ActorTGLFEP` map to `run_finn`, `run_modeid_nn` / `run_modeid_qlnn`,
   `run_qlgyro`, and the TGLF-EP scan driver.
 
-- **TJLF** provides the saturation-rule physics and the `InputTGLF` / `InputTJLF` types
-  that this package builds and reuses, including for the QLNN saturation-rule integration.
+- **TGLF.jl** provides the saturation-rule physics and the `InputTGLF` / `InputTJLF`
+  types that this package builds and reuses, including for the QLNN saturation-rule
+  integration.
 
-- **TJLFEP** (the energetic-particle stability code) builds its TGLF-EP inputs from
-  `TurbulentTransport.InputTGLFEP` and can be launched on SLURM via `run_tjlfep`.
+- **TGLFEP.jl** (the Julia implementation of TGLF-EP, the energetic-particle stability
+  code) builds its TGLF-EP inputs from `TurbulentTransport.InputTGLFEP` and can be
+  launched on SLURM via `run_tjlfep`.
 
 ## Citation
 If this software contributes to an academic publication, please cite it as follows:
